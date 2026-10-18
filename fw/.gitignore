@@ -4,3 +4,5 @@
 .ccls
 compile_commands.json
 .cache/clangd/
+managed_components/
+compile_commands.json
