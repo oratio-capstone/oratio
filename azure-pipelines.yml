@@ -1,0 +1,18 @@
+trigger:
+  branches:
+    include:
+      - '*'
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+steps:
+- checkout: self
+  persistCredentials: true
+  fetchDepth: 0
+
+- script: |
+    git remote add azure https://$(System.AccessToken)@dev.azure.com/capstoneProject4/Capstone%20Project/_git/oratio
+    git push azure --all
+    git push azure --tags
+  displayName: 'Mirror to Azure Repos'
