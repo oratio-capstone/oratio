@@ -30,3 +30,7 @@ steps:
 # - script: pio test -e esp32-c3-devkitm-1
 #   displayName: 'Run tests (ESP32-C3)'
 #   workingDirectory: '$(Build.SourcesDirectory)/fw'
+
+# Once you add [env:esp32-s3-devkitc-1] (or similar) to platformio.ini, add:
+# - script: pio run -e esp32-s3-devkitc-1
+#   displayName: 'Build ESP32-S3'
