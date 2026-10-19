@@ -14,7 +14,8 @@ def main():
         buffer = []
         while True:
             buffer, sender = sock.recvfrom(buffer_size)
-            print(f"received: {buffer}\n from: {sender}")
+            # print(f"received: {buffer}")
+            # print(f"from: {sender}")
             sock.sendto(buffer, sender)
 
 
