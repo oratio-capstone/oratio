@@ -6,7 +6,7 @@ Computer engineering capstone by Adam Dia, Yadah Ngolo, Fayza Oyarekhua, Mohamed
 
 | Component | Version |
 
-| Pioarduino platform | 55.03.312 |
-| ESP-IDF | 5.5.5 |
+|PlatformIO Core| 6.1.18|
+| ESP-IDF | 5.4.2 |
 | ESP-Mesh-Lite | 1.0.2 |
 | IoT-Bridge | 1.0.1 |

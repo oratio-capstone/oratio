@@ -6,3 +6,7 @@ compile_commands.json
 .cache/clangd/
 managed_components/
 compile_commands.json
+.pio-core/
+.venv-pio/
+build-*.log
+sdkconfig.*.old
