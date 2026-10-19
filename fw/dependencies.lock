@@ -3,6 +3,7 @@ dependencies:
     component_hash: 351350613ceafba240b761b4ea991e0f231ac7a9f59a9ee901f751bddc0bb18f
     dependencies:
     - name: idf
+      registry_url: https://components.espressif.com
       require: private
       version: '>=4.1'
     source:
@@ -55,12 +56,6 @@ dependencies:
       registry_url: https://components.espressif.com
       require: private
       version: 0.*
-    - name: espressif/esp_modem
-      registry_url: https://components.espressif.com
-      require: private
-      rules:
-      - if: target not in [esp32s2, esp32s3]
-      version: 1.*
     - name: espressif/esp_modem_usb_dte
       registry_url: https://components.espressif.com
       require: private
@@ -132,13 +127,6 @@ dependencies:
     - name: idf
       require: private
       version: '>=5.0'
-    - name: espressif/usb
-      registry_url: https://components.espressif.com
-      require: public
-      rules:
-      - if: idf_version >=6.0
-      - if: target not in ["linux"]
-      version: ^1.0.0
     source:
       registry_url: https://components.espressif.com
       type: service
@@ -153,7 +141,7 @@ dependencies:
   idf:
     source:
       type: idf
-    version: 5.5.5
+    version: 5.4.2
 direct_dependencies:
 - espressif/mesh_lite
 manifest_hash: 8ff4e7439fad4cb675d6f6c81b6ce25badf734b9d6dcf16cee0bdb2ade5c11ef
