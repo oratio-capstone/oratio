@@ -25,6 +25,7 @@ def main():
             # received buffer was a heartbeat, shouldn't be broadcast
 
             if chr(buffer[0]) == "H":
+                print("Heartbeat")
                 continue
 
             for node in nodes:
