@@ -24,6 +24,9 @@ def main():
             if node_id not in nodes:
                 nodes[node_id] = sender
                 print(f"{node_id} has joined on {sender}")
+            elif nodes[node_id] != sender:
+                nodes[node_id] = sender
+                print(f"{node_id} has a new ip: {sender}")
 
             # received buffer was a heartbeat, shouldn't be broadcast
             if chr(buffer[0]) == "H":
