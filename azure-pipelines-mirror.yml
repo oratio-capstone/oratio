@@ -11,5 +11,11 @@ steps:
 - script: |
     git clone --mirror https://github.com/oratio-capstone/oratio.git mirror
     cd mirror
-    git push --mirror https://$(System.AccessToken)@dev.azure.com/capstoneProject4/Capstone%20Project/_git/oratio
+
+    # 1. Push all your branches to Azure Repos
+    git push https://$(System.AccessToken)@dev.azure.com/capstoneProject4/Capstone%20Project/_git/oratio --all
+
+    # 2. Push all your tags to Azure Repos
+    git push https://$(System.AccessToken)@dev.azure.com/capstoneProject4/Capstone%20Project/_git/oratio --tags
+
   displayName: 'Mirror GitHub → Azure Repos'
