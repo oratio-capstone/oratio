@@ -1,6 +1,6 @@
 ## Audio output bring-up
 
-The speaker/I2S wrapper for AB#147 and a standalone tone harness for AB#148 are
+The speaker/I2S wrapper and a standalone tone harness are
 implemented in `lib/audio/audio_output.c/.h` and
 `test/test_148_audio_output/test_main.c`. See [audio playback bring-up](docs/audio_playback.md)
 for API contracts, provisional wiring, build/upload commands, host checks, and

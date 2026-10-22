@@ -1,12 +1,12 @@
-# Speaker output bring-up (AB#147 / AB#148)
+# Speaker output bring-up
 
 ## Scope and status
 
-This change implements task 147's low-level MAX98357A output wrapper and provides
-a standalone tone harness for task 148. It does not implement the task 161
-playback queue or task 162 speech test. Physical initialization, audible output,
+This change implements a low-level MAX98357A output wrapper and provides
+a standalone tone harness. The playback queue and speech test are planned for
+a later milestone. Physical initialization, audible output,
 and the 30-second tone acceptance test require the actual board; they have not
-been verified remotely. Do not close either Azure task based only on compilation.
+been verified remotely. Compilation alone does not establish hardware acceptance.
 
 ## Implementation and ownership
 
@@ -231,16 +231,15 @@ task-pacing inspection. Do not assume every silent output is a software error.
   Failed setup/intermediate runs are not counted as successful verification.
 - No physical initialization, flash, waveform capture, or audible test performed.
 
-## GitHub and Azure workflow
+## GitHub workflow
 
 Branch: `mohamed/feature/147-audio-output-driver`, based on GitHub `main` at
-`44370122c6bc58e9e7e18b4c0351bd78e81e7ac1`. This follows the wiki's
-`<username>/<type>/<work-item-id>-<short-description>` convention.
+`44370122c6bc58e9e7e18b4c0351bd78e81e7ac1`.
 
-Reference `AB#147` and `AB#148` in the commit and PR; task 148's tone harness is
-included to make task 147 reviewable. Do not claim hardware acceptance or close
-the tasks before it is demonstrated. GitHub is the development source; Azure
-Repos is a one-way mirror. Do not edit the mirror or merge directly into main.
+The tone harness makes the driver directly testable. Keep the pull request in
+draft until physical initialization and the 30-second tone test are verified.
+Use plain technical commit and pull-request descriptions. Do not merge directly
+into main.
 
 ## References
 
