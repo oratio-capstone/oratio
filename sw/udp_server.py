@@ -6,7 +6,7 @@ local_ip = "0.0.0.0"
 local_port = 8989
 buffer_size = 1024
 
-nodes = set()
+nodes = {}
 
 
 def main():
@@ -17,21 +17,23 @@ def main():
             buffer, sender = sock.recvfrom(buffer_size)
             # print(f"received: {buffer}")
             # print(f"from: {sender}")
+
             # register node
-            if sender not in nodes:
-                nodes.add(sender)
-                print(f"{sender} has joined")
+            # TODO: correct based on Fayza's implementation
+            node_id = (buffer[1] << 8) | buffer[2]  # extract node_id
+            if node_id not in nodes:
+                nodes[node_id] = sender
+                print(f"{node_id} has joined on {sender}")
 
             # received buffer was a heartbeat, shouldn't be broadcast
-
             if chr(buffer[0]) == "H":
                 continue
 
-            for node in nodes:
-                if node == sender:
+            for node, node_address in nodes.items():
+                if node == node_id:
                     continue
 
-                sock.sendto(buffer, node)
+                sock.sendto(buffer, node_address)
 
 
 if __name__ == "__main__":
