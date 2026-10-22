@@ -9,13 +9,14 @@ pool:
 
 steps:
 - script: |
-    git clone --mirror https://github.com/oratio-capstone/oratio.git mirror
+    # 1. Force a clean, standard clone that doesn't track GitHub's PR metadata
+    git clone --bare https://github.com/oratio-capstone/oratio.git mirror
     cd mirror
 
-    # 1. Push all your branches to Azure Repos
-    git push https://$(System.AccessToken)@dev.azure.com/capstoneProject4/Capstone%20Project/_git/oratio --all
+    # 2. Push all branches to Azure Repos
+    git push https://$(System.AccessToken)@dev.azure.com/capstoneProject4/Capstone%20Project/_git/oratio --all --force
 
-    # 2. Push all your tags to Azure Repos
-    git push https://$(System.AccessToken)@dev.azure.com/capstoneProject4/Capstone%20Project/_git/oratio --tags
-
+    # 3. Push all tags to Azure Repos
+    git push https://$(System.AccessToken)@dev.azure.com/capstoneProject4/Capstone%20Project/_git/oratio --tags --force
   displayName: 'Mirror GitHub → Azure Repos'
+
