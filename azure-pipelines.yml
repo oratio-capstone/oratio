@@ -26,11 +26,15 @@ steps:
   displayName: 'Build ESP32-C3'
   workingDirectory: '$(Build.SourcesDirectory)/fw'
 
-# Once you have tests under fw/test/, add:
-# - script: |
-#     pio test -e esp32-c3-devkitm-1
-#   displayName: 'Run tests (ESP32-C3)'
-#   workingDirectory: '$(Build.SourcesDirectory)/fw'
+- script: |
+    python tools/test_audio_output.py
+  displayName: 'Check audio output contracts (host GCC)'
+  workingDirectory: '$(Build.SourcesDirectory)/fw'
+
+- script: |
+    pio run -e audio_output_test
+  displayName: 'Build standalone speaker tone firmware (ESP32-C3)'
+  workingDirectory: '$(Build.SourcesDirectory)/fw'
 
 # Once you add [env:esp32-s3-devkitc-1] (or similar) to platformio.ini, add:
 # - script: pio run -e esp32-s3-devkitc-1
