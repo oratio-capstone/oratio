@@ -156,6 +156,12 @@ Replace `COMx` with the board's actual port (`pio device list`). Close the monit
 before uploading. In VS Code, open `fw/` as the PlatformIO project, select the
 desired environment, then use Build, Upload, and Monitor.
 
+The tested SDK configuration enables USB Serial/JTAG secondary console output,
+which provides logs on the C3 Super Mini's native USB connection even though
+the inherited profile selects UART0 as the primary console. Leave GPIO18/19
+available for USB. If no port appears, check the USB data cable and boot/download
+mode before changing audio pins or adding Arduino USB build flags.
+
 If `pio` is not on PATH in this Windows installation, substitute:
 
 ```powershell
@@ -198,11 +204,31 @@ task-pacing inspection. Do not assume every silent output is a software error.
 - Resolved platform: pioarduino 55.03.312; framework headers: ESP-IDF 5.5.5.
   The repository's moving `stable` URL was preserved; no framework upgrade or pin
   was introduced in this change. This differs from the mesh feature branch's 5.4.2.
+- Builds report a flash-size configuration warning: the inherited board profile
+  advertises 4 MB while SDK configuration selects 2 MB. This was not a physical
+  flash measurement (no board was connected). The original main configuration
+  also selects 2 MB. Confirm the Super Mini's flash capacity before choosing a
+  different flash/partition configuration; no such change is bundled here.
 - Host compiler: MSYS2 GCC 15.2.0, C11, warnings including conversions/shadowing
   treated as errors. All six suites passed: argument/state validation; stereo
   packing/partial writes/deadline; timeout/resume; write faults; initialization
   and cleanup failures; stop/restart/retry cleanup.
-- Firmware build results will be recorded after the toolchain installation ends.
+- PASS: original `main` firmware snapshot at `4437012`, built with
+  `pio run -e esp32-c3-devkitm-1` (529.69 seconds). The temporary snapshot needed
+  valid main-commit Git metadata and a fresh CMake configuration; no original
+  firmware source changes were required.
+- PASS: `pio run -e audio_output_test` (357.61 seconds). The real ESP-IDF compiler
+  compiled `audio_output.c` and the selected tone entry point, linked the image,
+  and generated bootloader, application, partition, and factory binaries.
+  Reported static RAM: 11800 bytes; program size: 204684 bytes. Dynamic IDF driver
+  and DMA allocations are additional runtime memory, not included in that RAM number.
+- PASS: normal blink build with the registered audio component,
+  `pio run -e esp32-c3-devkitm-1` (543.33 seconds). Static RAM: 9816 bytes;
+  program size: 169836 bytes, matching the baseline's reported sizes. The
+  component is compiled while the unchanged blink entry point remains selected.
+- An early overlapping project-environment build invalidated intermediate files;
+  those artifacts were discarded and the project builds were rerun sequentially.
+  Failed setup/intermediate runs are not counted as successful verification.
 - No physical initialization, flash, waveform capture, or audible test performed.
 
 ## GitHub and Azure workflow
