@@ -1,12 +1,14 @@
 idf_component_register(
     SRCS "network.c"
     INCLUDE_DIRS "."
-    REQUIRES esp_common
+    REQUIRES esp_common freertos
     PRIV_REQUIRES
         nvs_flash
         esp_netif
         esp_event
         esp_wifi
+        esp_timer
+        lwip
         esp_hw_support
         freertos
         espressif__iot_bridge

@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <errno.h>
 
 #include "sdkconfig.h"
 #include "esp_bridge.h"
@@ -16,6 +17,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "nvs_flash.h"
+#include "lwip/sockets.h"
 
 /* Stop compilation if the build environment has not selected a valid firmware role. */
 #ifndef APP_IS_ROOT
@@ -32,6 +34,7 @@
 
 /* A Wi-Fi SSID holds up to 32 bytes, plus one byte for the string terminator. */
 #define SOFTAP_SSID_BUFFER_SIZE 33
+#define HEARTBEAT_INTERVAL_MS 5000
 
 static const char *TAG = "MESH_NETWORK";
 static const bool IS_ROOT = (APP_IS_ROOT == 1);
@@ -267,4 +270,217 @@ void mesh_network_log_status(void)
         "Parent BSSID: " MACSTR " | RSSI: %d dBm",
         MAC2STR(parent_info.bssid),
         parent_info.rssi);
+}
+
+/* Create, bind, and configure a UDP socket. The caller decides when to retry.
+ * Return the descriptor on success, or -1 after cleaning up a setup failure.
+ */
+static int network_socket_create(void)
+{
+    int socket_fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+
+    if (socket_fd < 0)
+    {
+        ESP_LOGE(TAG, "Failed to create UDP socket: %d", errno);
+        return -1;
+    }
+
+    struct sockaddr_in local_address =
+        {
+            .sin_family = AF_INET,
+            .sin_port = htons(8989),
+            .sin_addr.s_addr = htonl(INADDR_ANY)};
+
+    int bind_result = bind(
+        socket_fd, (const struct sockaddr *)&local_address, sizeof(local_address));
+
+    if (bind_result < 0)
+    {
+        ESP_LOGE(TAG, "Failed to bind UDP socket: %d", errno);
+        close(socket_fd);
+        return -1;
+    }
+
+    struct timeval receive_timeout =
+        {
+            .tv_sec = 1,
+            .tv_usec = 0};
+
+    int setsockopt_result = setsockopt(
+        socket_fd,
+        SOL_SOCKET,
+        SO_RCVTIMEO,
+        &receive_timeout,
+        sizeof(receive_timeout));
+
+    if (setsockopt_result < 0)
+    {
+        ESP_LOGE(TAG, "Failed to set receive timeout: %d", errno);
+        close(socket_fd);
+        return -1;
+    }
+
+    return socket_fd;
+}
+
+static void network_task(void *arg)
+{
+    (void)arg;
+    int socket_fd = -1;
+
+    struct sockaddr_in server_address =
+        {
+            .sin_family = AF_INET,
+            .sin_port = htons(8989)};
+
+    int inet_pton_result = inet_pton(
+        AF_INET, "192.168.137.1", &server_address.sin_addr);
+
+    if (inet_pton_result != 1)
+    {
+        ESP_LOGE(TAG, "Could not configure server IP address");
+        vTaskDelete(NULL);
+    }
+
+    uint8_t station_mac[6] = {0};
+    esp_err_t mac_result = esp_wifi_get_mac(WIFI_IF_STA, station_mac);
+
+    if (mac_result != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Failed to read station MAC: %s", esp_err_to_name(mac_result));
+        vTaskDelete(NULL);
+    }
+
+    uint8_t heartbeat_packet[7] = {0};
+    uint16_t sequence_number = 0;
+
+    heartbeat_packet[0] = 'H'; /* Heartbeat message type */
+    heartbeat_packet[1] = station_mac[4];
+    heartbeat_packet[2] = station_mac[5];
+
+    uint8_t reply_packet[8] = {0};
+    struct sockaddr_in reply_address = {0};
+    socklen_t reply_address_length = sizeof(reply_address);
+
+    TickType_t last_wake_time = xTaskGetTickCount();
+
+    while (true)
+    {
+        if (socket_fd < 0)
+        {
+            socket_fd = network_socket_create();
+
+            if (socket_fd < 0)
+            {
+                ESP_LOGW(TAG, "Socket setup failed; retrying in one second");
+                vTaskDelay(pdMS_TO_TICKS(1000));
+                continue;
+            }
+
+            /* Start a fresh heartbeat schedule after socket setup or recovery. */
+            last_wake_time = xTaskGetTickCount();
+        }
+
+        heartbeat_packet[3] = (uint8_t)(sequence_number >> 8);
+        heartbeat_packet[4] = (uint8_t)(sequence_number & 0xFF);
+
+        ssize_t bytes_sent = sendto(
+            socket_fd,
+            heartbeat_packet,
+            sizeof(heartbeat_packet),
+            0,
+            (const struct sockaddr *)&server_address,
+            sizeof(server_address));
+
+        if (bytes_sent < 0)
+        {
+            ESP_LOGE(TAG, "Failed to send heartbeat packet: %d", errno);
+            close(socket_fd);
+            socket_fd = -1;
+        }
+        else if (bytes_sent != (ssize_t)sizeof(heartbeat_packet))
+        {
+            ESP_LOGW(TAG, "Sent %zd bytes, expected to send %zu bytes", bytes_sent, sizeof(heartbeat_packet));
+            close(socket_fd);
+            socket_fd = -1;
+        }
+        else
+        {
+            ESP_LOGI(TAG, "Heartbeat sent, sequence: %u", (unsigned int)sequence_number);
+
+            reply_address_length = sizeof(reply_address);
+            ssize_t bytes_received = recvfrom(
+                socket_fd,
+                reply_packet,
+                sizeof(reply_packet),
+                0,
+                (struct sockaddr *)&reply_address,
+                &reply_address_length);
+
+            if (bytes_received < 0)
+            {
+                if (errno == EAGAIN || errno == EWOULDBLOCK)
+                {
+                    ESP_LOGW(TAG, "Receive operation timed out");
+                }
+                else if (errno == EINTR)
+                {
+                    ESP_LOGW(TAG, "Receive operation interrupted");
+                }
+                else
+                {
+                    ESP_LOGE(TAG, "Failed to receive heartbeat reply: %d", errno);
+                    close(socket_fd);
+                    socket_fd = -1;
+                }
+            }
+            else if (bytes_received != (ssize_t)sizeof(heartbeat_packet))
+            {
+                ESP_LOGW(TAG, "Received %zd bytes, expected to receive %zu bytes", bytes_received, sizeof(heartbeat_packet));
+            }
+            else if (reply_address.sin_addr.s_addr != server_address.sin_addr.s_addr ||
+                     reply_address.sin_port != server_address.sin_port)
+            {
+                char reply_ip[INET_ADDRSTRLEN] = {0};
+
+                if (inet_ntop(AF_INET, &reply_address.sin_addr, reply_ip, sizeof(reply_ip)) == NULL)
+                {
+                    ESP_LOGW(TAG, "Received packet from unexpected source; IP conversion failed");
+                }
+                else
+                {
+                    ESP_LOGW(TAG, "Received packet from unexpected source: %s:%u", reply_ip, (unsigned int)ntohs(reply_address.sin_port));
+                }
+            }
+            else if (memcmp(heartbeat_packet, reply_packet, sizeof(heartbeat_packet)) != 0)
+            {
+                ESP_LOGW(TAG, "Received heartbeat reply does not match sent heartbeat");
+            }
+            else
+            {
+                ESP_LOGI(TAG, "Heartbeat reply received from server");
+            }
+
+            sequence_number++;
+        }
+
+        ESP_LOGI(TAG, "Network status heartbeat");
+        mesh_network_log_status();
+        xTaskDelayUntil(
+            &last_wake_time,
+            pdMS_TO_TICKS(HEARTBEAT_INTERVAL_MS));
+    }
+}
+
+esp_err_t network_task_start(void)
+{
+    BaseType_t result = xTaskCreate(
+        network_task,
+        "network_task",
+        4096,
+        NULL,
+        tskIDLE_PRIORITY + 1,
+        NULL);
+
+    return (result == pdPASS) ? ESP_OK : ESP_ERR_NO_MEM;
 }
