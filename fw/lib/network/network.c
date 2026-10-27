@@ -13,7 +13,7 @@
 #include "esp_mac.h"
 #include "esp_mesh_lite.h"
 #include "esp_netif.h"
-#include "esp_wifi.h"
+#include <esp_wifi.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "nvs_flash.h"
@@ -272,6 +272,115 @@ void mesh_network_log_status(void)
         parent_info.rssi);
 }
 
+esp_err_t oratio_packet_encode(
+    const oratio_packet_t *packet,
+    uint8_t *buffer,
+    size_t buffer_capacity,
+    size_t *encoded_length)
+{
+    /* Clear the output count even if another argument is invalid. */
+    if (encoded_length != NULL)
+    {
+        *encoded_length = 0;
+    }
+
+    /* Validate first, then write bytes. */
+    if (packet == NULL || buffer == NULL || encoded_length == NULL)
+    {
+        ESP_LOGE(TAG, "Null pointer argument(s) to oratio_packet_encode");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (packet->type != ORATIO_PACKET_AUDIO &&
+        packet->type != ORATIO_PACKET_TELEMETRY &&
+        packet->type != ORATIO_PACKET_HEARTBEAT)
+    {
+        ESP_LOGE(TAG, "Invalid packet type: %u", (unsigned int)packet->type);
+        return ESP_ERR_INVALID_ARG;
+    }
+    else if (packet->length > ORATIO_MAX_PAYLOAD_SIZE)
+    {
+        ESP_LOGE(TAG, "Packet length exceeds maximum: %u", (unsigned int)packet->length);
+        return ESP_ERR_INVALID_ARG;
+    }
+    else if (packet->type == ORATIO_PACKET_HEARTBEAT && packet->length != 0)
+    {
+        ESP_LOGE(TAG, "Heartbeat packet must have zero payload length");
+        return ESP_ERR_INVALID_ARG;
+    }
+    else if (buffer_capacity < ORATIO_HEADER_SIZE + packet->length)
+    {
+        ESP_LOGE(TAG, "Buffer capacity insufficient for packet encoding");
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    buffer[0] = packet->type;
+    buffer[1] = (uint8_t)(packet->node_id >> 8);
+    buffer[2] = (uint8_t)(packet->node_id & 0xFF);
+    buffer[3] = (uint8_t)(packet->sequence >> 8);
+    buffer[4] = (uint8_t)(packet->sequence & 0xFF);
+    buffer[5] = (uint8_t)(packet->length >> 8);
+    buffer[6] = (uint8_t)(packet->length & 0xFF);
+
+    memcpy(buffer + ORATIO_HEADER_SIZE, packet->payload, packet->length);
+    *encoded_length = ORATIO_HEADER_SIZE + packet->length;
+    return ESP_OK;
+}
+
+esp_err_t oratio_packet_decode(
+    const uint8_t *buffer,
+    size_t received_length,
+    oratio_packet_t *packet)
+{
+    /* Check the input storage before reading any header bytes. */
+    if (buffer == NULL || packet == NULL)
+    {
+        ESP_LOGE(TAG, "Null pointer argument(s) to oratio_packet_decode");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (received_length < ORATIO_HEADER_SIZE)
+    {
+        ESP_LOGE(TAG, "Received length is insufficient for packet header");
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    packet->type = buffer[0];
+    packet->node_id = ((uint16_t)buffer[1] << 8) | (uint16_t)buffer[2];
+    packet->sequence = ((uint16_t)buffer[3] << 8) | (uint16_t)buffer[4];
+    packet->length = ((uint16_t)buffer[5] << 8) | (uint16_t)buffer[6];
+
+    /* Only validate header fields after decoding their received values. */
+    if (packet->type != ORATIO_PACKET_AUDIO &&
+        packet->type != ORATIO_PACKET_TELEMETRY &&
+        packet->type != ORATIO_PACKET_HEARTBEAT)
+    {
+        ESP_LOGE(TAG, "Invalid packet type: %u", (unsigned int)packet->type);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (packet->length > ORATIO_MAX_PAYLOAD_SIZE)
+    {
+        ESP_LOGE(TAG, "Decoded payload exceeds maximum: %u", (unsigned int)packet->length);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    if (packet->type == ORATIO_PACKET_HEARTBEAT && packet->length != 0)
+    {
+        ESP_LOGE(TAG, "Heartbeat packet must have zero payload length");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (received_length != ORATIO_HEADER_SIZE + packet->length)
+    {
+        ESP_LOGE(TAG, "Received length does not match declared payload length");
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    memcpy(packet->payload, buffer + ORATIO_HEADER_SIZE, packet->length);
+    return ESP_OK;
+}
+
 /* Create, bind, and configure a UDP socket. The caller decides when to retry.
  * Return the descriptor on success, or -1 after cleaning up a setup failure.
  */
@@ -351,14 +460,14 @@ static void network_task(void *arg)
         vTaskDelete(NULL);
     }
 
-    uint8_t heartbeat_packet[7] = {0};
+    uint8_t heartbeat_packet[ORATIO_HEADER_SIZE] = {0};
     uint16_t sequence_number = 0;
 
-    heartbeat_packet[0] = 'H'; /* Heartbeat message type */
+    heartbeat_packet[0] = ORATIO_PACKET_HEARTBEAT;
     heartbeat_packet[1] = station_mac[4];
     heartbeat_packet[2] = station_mac[5];
 
-    uint8_t reply_packet[8] = {0};
+    uint8_t reply_packet[ORATIO_HEADER_SIZE + 1] = {0};
     struct sockaddr_in reply_address = {0};
     socklen_t reply_address_length = sizeof(reply_address);
 
