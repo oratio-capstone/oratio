@@ -13,11 +13,15 @@
 #include "esp_mac.h"
 #include "esp_mesh_lite.h"
 #include "esp_netif.h"
-#include <esp_wifi.h>
+#include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "nvs_flash.h"
 #include "lwip/sockets.h"
+
+/* ========================================================================== */
+/* 1. Build configuration and shared state                                     */
+/* ========================================================================== */
 
 /* Stop compilation if the build environment has not selected a valid firmware role. */
 #ifndef APP_IS_ROOT
@@ -35,6 +39,9 @@
 /* A Wi-Fi SSID holds up to 32 bytes, plus one byte for the string terminator. */
 #define SOFTAP_SSID_BUFFER_SIZE 33
 #define HEARTBEAT_INTERVAL_MS 5000
+#define SOCKET_RETRY_MS 1000
+#define ORATIO_UDP_PORT 8989
+#define ORATIO_SERVER_IP "192.168.137.1"
 
 static const char *TAG = "MESH_NETWORK";
 static const bool IS_ROOT = (APP_IS_ROOT == 1);
@@ -45,6 +52,14 @@ static const uint8_t MESH_CHANNEL = 6;
 
 /* Keep the generated network name available for configuration and later status logs. */
 static char s_softap_ssid[SOFTAP_SSID_BUFFER_SIZE];
+
+static QueueHandle_t s_capture_queue = NULL;
+static QueueHandle_t s_playback_queue = NULL;
+static TaskHandle_t s_network_task_handle = NULL;
+
+/* ========================================================================== */
+/* 2. Mesh setup and diagnostics                                               */
+/* ========================================================================== */
 
 /* Initialize nonvolatile storage, which Wi-Fi and Mesh-Lite use for persistent settings. */
 static esp_err_t storage_init(void)
@@ -272,6 +287,10 @@ void mesh_network_log_status(void)
         parent_info.rssi);
 }
 
+/* ========================================================================== */
+/* 3. Packet encoding and decoding                                             */
+/* ========================================================================== */
+
 esp_err_t oratio_packet_encode(
     const oratio_packet_t *packet,
     uint8_t *buffer,
@@ -381,6 +400,10 @@ esp_err_t oratio_packet_decode(
     return ESP_OK;
 }
 
+/* ========================================================================== */
+/* 4. UDP socket setup and incoming packets                                    */
+/* ========================================================================== */
+
 /* Create, bind, and configure a UDP socket. The caller decides when to retry.
  * Return the descriptor on success, or -1 after cleaning up a setup failure.
  */
@@ -397,7 +420,7 @@ static int network_socket_create(void)
     struct sockaddr_in local_address =
         {
             .sin_family = AF_INET,
-            .sin_port = htons(8989),
+            .sin_port = htons(ORATIO_UDP_PORT),
             .sin_addr.s_addr = htonl(INADDR_ANY)};
 
     int bind_result = bind(
@@ -412,8 +435,8 @@ static int network_socket_create(void)
 
     struct timeval receive_timeout =
         {
-            .tv_sec = 1,
-            .tv_usec = 0};
+            .tv_sec = 0,
+            .tv_usec = 10000};
 
     int setsockopt_result = setsockopt(
         socket_fd,
@@ -432,164 +455,283 @@ static int network_socket_create(void)
     return socket_fd;
 }
 
+/* Receive at most one datagram per loop so sending also gets processor time.
+ * Return false only for a socket error that requires cleanup and recreation.
+ * Valid data packets are copied to the optional playback queue.
+ */
+static bool network_receive_packet(int socket_fd,
+                                   const struct sockaddr_in *server_address)
+{
+    /* Reusable storage owned by the single network task. */
+    static uint8_t receive_buffer[ORATIO_HEADER_SIZE + ORATIO_MAX_PAYLOAD_SIZE + 1];
+    struct sockaddr_in sender_address = {0};
+    socklen_t sender_length = sizeof(sender_address);
+    ssize_t bytes_received = recvfrom(
+        socket_fd, receive_buffer, sizeof(receive_buffer), 0,
+        (struct sockaddr *)&sender_address, &sender_length);
+
+    if (bytes_received < 0)
+    {
+        const int receive_error = errno;
+        /* A quiet socket is expected with a short receive timeout. */
+        if (receive_error == EAGAIN || receive_error == EWOULDBLOCK ||
+            receive_error == EINTR)
+        {
+            return true;
+        }
+
+        ESP_LOGE(TAG, "Failed to receive UDP packet: %d", receive_error);
+        return false;
+    }
+
+    /* Forwarded packets still arrive from the gateway's socket. The original
+     * sender is identified by the Node ID inside the decoded header.
+     */
+    if (sender_address.sin_addr.s_addr != server_address->sin_addr.s_addr ||
+        sender_address.sin_port != server_address->sin_port)
+    {
+        ESP_LOGW(TAG, "Ignoring packet from unexpected gateway endpoint");
+        return true;
+    }
+
+    static oratio_packet_t received_packet;
+    esp_err_t result = oratio_packet_decode(
+        receive_buffer, (size_t)bytes_received, &received_packet);
+    if (result != ESP_OK)
+    {
+        ESP_LOGW(TAG, "Ignoring invalid UDP packet: %s", esp_err_to_name(result));
+        return true;
+    }
+
+    if (received_packet.type == ORATIO_PACKET_HEARTBEAT)
+    {
+        ESP_LOGI(TAG, "Heartbeat received: node=%04x sequence=%u",
+                 (unsigned int)received_packet.node_id,
+                 (unsigned int)received_packet.sequence);
+    }
+    else
+    {
+        ESP_LOGI(TAG, "Packet received: type=%c node=%04x sequence=%u length=%u",
+                 received_packet.type, (unsigned int)received_packet.node_id,
+                 (unsigned int)received_packet.sequence,
+                 (unsigned int)received_packet.length);
+
+        if (s_playback_queue != NULL)
+        {
+            BaseType_t queue_result = xQueueSend(
+                s_playback_queue,
+                &received_packet,
+                0);
+
+            if (queue_result != pdTRUE)
+            {
+                ESP_LOGW(TAG, "Playback queue full; dropping received packet");
+            }
+        }
+    }
+
+    return true;
+}
+
+/* ========================================================================== */
+/* 5. Network task loop                                                       */
+/* ========================================================================== */
+
 static void network_task(void *arg)
 {
     (void)arg;
     int socket_fd = -1;
+    const struct sockaddr_in local_server = {
+        .sin_family = AF_INET,
+        .sin_port = htons(ORATIO_UDP_PORT)};
+    struct sockaddr_in server_address = local_server;
 
-    struct sockaddr_in server_address =
-        {
-            .sin_family = AF_INET,
-            .sin_port = htons(8989)};
-
-    int inet_pton_result = inet_pton(
-        AF_INET, "192.168.137.1", &server_address.sin_addr);
-
-    if (inet_pton_result != 1)
+    if (inet_pton(AF_INET, ORATIO_SERVER_IP, &server_address.sin_addr) != 1)
     {
         ESP_LOGE(TAG, "Could not configure server IP address");
+        s_network_task_handle = NULL;
         vTaskDelete(NULL);
+        return;
     }
 
     uint8_t station_mac[6] = {0};
     esp_err_t mac_result = esp_wifi_get_mac(WIFI_IF_STA, station_mac);
-
     if (mac_result != ESP_OK)
     {
         ESP_LOGE(TAG, "Failed to read station MAC: %s", esp_err_to_name(mac_result));
+        s_network_task_handle = NULL;
         vTaskDelete(NULL);
+        return;
     }
 
     uint8_t heartbeat_packet[ORATIO_HEADER_SIZE] = {0};
-    uint16_t sequence_number = 0;
-
     heartbeat_packet[0] = ORATIO_PACKET_HEARTBEAT;
     heartbeat_packet[1] = station_mac[4];
     heartbeat_packet[2] = station_mac[5];
+    uint16_t sequence_number = 0;
+    const TickType_t heartbeat_interval = pdMS_TO_TICKS(HEARTBEAT_INTERVAL_MS);
+    TickType_t last_heartbeat_time = xTaskGetTickCount();
 
-    uint8_t reply_packet[ORATIO_HEADER_SIZE + 1] = {0};
-    struct sockaddr_in reply_address = {0};
-    socklen_t reply_address_length = sizeof(reply_address);
+    static oratio_tx_item_t outgoing_data;
+    static oratio_packet_t outgoing_packet;
 
-    TickType_t last_wake_time = xTaskGetTickCount();
+    static uint8_t send_buffer[ORATIO_HEADER_SIZE + ORATIO_MAX_PAYLOAD_SIZE];
 
     while (true)
     {
+        /* A. Create/recover the socket. Delay failed setup attempts. */
         if (socket_fd < 0)
         {
             socket_fd = network_socket_create();
-
             if (socket_fd < 0)
             {
                 ESP_LOGW(TAG, "Socket setup failed; retrying in one second");
-                vTaskDelay(pdMS_TO_TICKS(1000));
+                vTaskDelay(pdMS_TO_TICKS(SOCKET_RETRY_MS));
                 continue;
             }
 
-            /* Start a fresh heartbeat schedule after socket setup or recovery. */
-            last_wake_time = xTaskGetTickCount();
+            /* Send immediately after setup, without catching up missed periods. */
+            last_heartbeat_time = xTaskGetTickCount() - heartbeat_interval;
         }
 
-        heartbeat_packet[3] = (uint8_t)(sequence_number >> 8);
-        heartbeat_packet[4] = (uint8_t)(sequence_number & 0xFF);
-
-        ssize_t bytes_sent = sendto(
-            socket_fd,
-            heartbeat_packet,
-            sizeof(heartbeat_packet),
-            0,
-            (const struct sockaddr *)&server_address,
-            sizeof(server_address));
-
-        if (bytes_sent < 0)
+        /* B. Connect the capture queue to outgoing packets */
+        if (s_capture_queue != NULL &&
+            xQueueReceive(s_capture_queue, &outgoing_data, 0) == pdTRUE)
         {
-            ESP_LOGE(TAG, "Failed to send heartbeat packet: %d", errno);
-            close(socket_fd);
-            socket_fd = -1;
-        }
-        else if (bytes_sent != (ssize_t)sizeof(heartbeat_packet))
-        {
-            ESP_LOGW(TAG, "Sent %zd bytes, expected to send %zu bytes", bytes_sent, sizeof(heartbeat_packet));
-            close(socket_fd);
-            socket_fd = -1;
-        }
-        else
-        {
-            ESP_LOGI(TAG, "Heartbeat sent, sequence: %u", (unsigned int)sequence_number);
-
-            reply_address_length = sizeof(reply_address);
-            ssize_t bytes_received = recvfrom(
-                socket_fd,
-                reply_packet,
-                sizeof(reply_packet),
-                0,
-                (struct sockaddr *)&reply_address,
-                &reply_address_length);
-
-            if (bytes_received < 0)
+            /* Validate the item, build its header, encode, and send. */
+            if (outgoing_data.length > ORATIO_MAX_PAYLOAD_SIZE)
             {
-                if (errno == EAGAIN || errno == EWOULDBLOCK)
-                {
-                    ESP_LOGW(TAG, "Receive operation timed out");
-                }
-                else if (errno == EINTR)
-                {
-                    ESP_LOGW(TAG, "Receive operation interrupted");
-                }
-                else
-                {
-                    ESP_LOGE(TAG, "Failed to receive heartbeat reply: %d", errno);
-                    close(socket_fd);
-                    socket_fd = -1;
-                }
+                ESP_LOGW(TAG, "Outgoing item exceeds maximum payload size; dropping");
             }
-            else if (bytes_received != (ssize_t)sizeof(heartbeat_packet))
+            else if (outgoing_data.type != ORATIO_PACKET_AUDIO &&
+                     outgoing_data.type != ORATIO_PACKET_TELEMETRY)
             {
-                ESP_LOGW(TAG, "Received %zd bytes, expected to receive %zu bytes", bytes_received, sizeof(heartbeat_packet));
-            }
-            else if (reply_address.sin_addr.s_addr != server_address.sin_addr.s_addr ||
-                     reply_address.sin_port != server_address.sin_port)
-            {
-                char reply_ip[INET_ADDRSTRLEN] = {0};
-
-                if (inet_ntop(AF_INET, &reply_address.sin_addr, reply_ip, sizeof(reply_ip)) == NULL)
-                {
-                    ESP_LOGW(TAG, "Received packet from unexpected source; IP conversion failed");
-                }
-                else
-                {
-                    ESP_LOGW(TAG, "Received packet from unexpected source: %s:%u", reply_ip, (unsigned int)ntohs(reply_address.sin_port));
-                }
-            }
-            else if (memcmp(heartbeat_packet, reply_packet, sizeof(heartbeat_packet)) != 0)
-            {
-                ESP_LOGW(TAG, "Received heartbeat reply does not match sent heartbeat");
+                ESP_LOGW(TAG, "Outgoing item has invalid type; dropping");
             }
             else
             {
-                ESP_LOGI(TAG, "Heartbeat reply received from server");
-            }
+                outgoing_packet.type = outgoing_data.type;
+                outgoing_packet.node_id = ((uint16_t)station_mac[4] << 8) | (uint16_t)station_mac[5];
+                outgoing_packet.sequence = sequence_number;
+                outgoing_packet.length = outgoing_data.length;
+                memcpy(outgoing_packet.payload, outgoing_data.payload, outgoing_data.length);
 
-            sequence_number++;
+                size_t encoded_length = 0;
+                esp_err_t encode_result = oratio_packet_encode(
+                    &outgoing_packet, send_buffer, sizeof(send_buffer), &encoded_length);
+
+                if (encode_result != ESP_OK)
+                {
+                    ESP_LOGW(TAG, "Failed to encode outgoing packet: %s", esp_err_to_name(encode_result));
+                }
+                else
+                {
+                    ssize_t bytes_sent = sendto(
+                        socket_fd, send_buffer, encoded_length, 0,
+                        (const struct sockaddr *)&server_address, sizeof(server_address));
+
+                    if (bytes_sent != (ssize_t)encoded_length)
+                    {
+                        if (bytes_sent < 0)
+                        {
+                            ESP_LOGE(TAG, "Data send failed: %d", errno);
+                        }
+                        else
+                        {
+                            ESP_LOGW(TAG, "Sent %zd bytes, expected %zu", bytes_sent, encoded_length);
+                        }
+                        /* Drop this dequeued item and recover before sending again. */
+                        close(socket_fd);
+                        socket_fd = -1;
+                        vTaskDelay(pdMS_TO_TICKS(SOCKET_RETRY_MS));
+                        continue;
+                    }
+                    else
+                    {
+                        ESP_LOGI(TAG, "Packet sent: type=%c node=%04x sequence=%u length=%u",
+                                 outgoing_packet.type,
+                                 (unsigned int)outgoing_packet.node_id,
+                                 (unsigned int)outgoing_packet.sequence,
+                                 (unsigned int)outgoing_packet.length);
+                        sequence_number++;
+                        last_heartbeat_time = xTaskGetTickCount(); /* Reset heartbeat timer after sending data. */
+                    }
+                }
+            }
         }
 
-        ESP_LOGI(TAG, "Network status heartbeat");
-        mesh_network_log_status();
-        xTaskDelayUntil(
-            &last_wake_time,
-            pdMS_TO_TICKS(HEARTBEAT_INTERVAL_MS));
+        /* C. Send a heartbeat only after five seconds without outgoing data. */
+        TickType_t now = xTaskGetTickCount();
+        if ((TickType_t)(now - last_heartbeat_time) >= heartbeat_interval)
+        {
+            heartbeat_packet[3] = (uint8_t)(sequence_number >> 8);
+            heartbeat_packet[4] = (uint8_t)(sequence_number & 0xFF);
+            ssize_t bytes_sent = sendto(
+                socket_fd, heartbeat_packet, sizeof(heartbeat_packet), 0,
+                (const struct sockaddr *)&server_address, sizeof(server_address));
+
+            if (bytes_sent != (ssize_t)sizeof(heartbeat_packet))
+            {
+                if (bytes_sent < 0)
+                {
+                    ESP_LOGE(TAG, "Failed to send heartbeat packet: %d", errno);
+                }
+                else
+                {
+                    ESP_LOGW(TAG, "Sent %zd bytes, expected %zu",
+                             bytes_sent, sizeof(heartbeat_packet));
+                }
+                close(socket_fd);
+                socket_fd = -1;
+                vTaskDelay(pdMS_TO_TICKS(SOCKET_RETRY_MS));
+                continue;
+            }
+
+            last_heartbeat_time = xTaskGetTickCount();
+            ESP_LOGI(TAG, "Heartbeat sent, sequence: %u", (unsigned int)sequence_number);
+            sequence_number++;
+            mesh_network_log_status();
+        }
+
+        /* D. Receive independently of heartbeat transmission. */
+        if (!network_receive_packet(socket_fd, &server_address))
+        {
+            close(socket_fd);
+            socket_fd = -1;
+            vTaskDelay(pdMS_TO_TICKS(SOCKET_RETRY_MS));
+            continue;
+        }
+
+        /* Yield even when packets arrive continuously. This is one RTOS tick,
+         * not a five-second sleep that would delay forwarding reception.
+         */
+        vTaskDelay(1);
     }
 }
 
-esp_err_t network_task_start(void)
+/* ========================================================================== */
+/* 6. Public task startup                                                     */
+/* ========================================================================== */
+
+esp_err_t network_task_start(QueueHandle_t capture_queue,
+                             QueueHandle_t playback_queue)
 {
+    /* Call from startup once; task-owned buffers and queue handles are shared. */
+    if (s_network_task_handle != NULL)
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    s_capture_queue = capture_queue;
+    s_playback_queue = playback_queue;
+
     BaseType_t result = xTaskCreate(
         network_task,
         "network_task",
         4096,
         NULL,
         tskIDLE_PRIORITY + 1,
-        NULL);
+        &s_network_task_handle);
 
     return (result == pdPASS) ? ESP_OK : ESP_ERR_NO_MEM;
 }
