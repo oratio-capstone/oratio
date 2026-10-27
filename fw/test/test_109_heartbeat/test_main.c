@@ -14,7 +14,7 @@ void app_main(void)
         return;
     }
 
-    const esp_err_t task_result = network_task_start();
+    const esp_err_t task_result = network_task_start(NULL, NULL);
     if (task_result != ESP_OK)
     {
         ESP_LOGE(TAG, "Failed to start network task: %s", esp_err_to_name(task_result));

@@ -3,10 +3,14 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "esp_err.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 
 esp_err_t mesh_network_init(void);
 void mesh_network_log_status(void);
-esp_err_t network_task_start(void);
+esp_err_t network_task_start(
+    QueueHandle_t capture_queue,
+    QueueHandle_t playback_queue);
 
 typedef enum
 {
@@ -38,3 +42,10 @@ esp_err_t oratio_packet_decode(
     const uint8_t *buffer,
     size_t received_length,
     oratio_packet_t *packet);
+
+typedef struct
+{
+    uint8_t type;
+    uint16_t length;
+    uint8_t payload[ORATIO_MAX_PAYLOAD_SIZE];
+} oratio_tx_item_t;
