@@ -1,0 +1,27 @@
+{
+  "dataset": "Free Spoken Digit Dataset",
+  "speaker": "Jackson",
+  "revision": "26eb9aaf76e81b692f806f9140c2d2777410d7a1",
+  "license": "CC-BY-SA-4.0",
+  "recordings": [
+    {
+      "file": "1_jackson_0.wav",
+      "url": "https://raw.githubusercontent.com/Jakobovski/free-spoken-digit-dataset/26eb9aaf76e81b692f806f9140c2d2777410d7a1/recordings/1_jackson_0.wav",
+      "sha256": "b3739400f793620875bb7849bfd8629dc6b2966ed6bda8276aa14178a612f13a"
+    },
+    {
+      "file": "2_jackson_0.wav",
+      "url": "https://raw.githubusercontent.com/Jakobovski/free-spoken-digit-dataset/26eb9aaf76e81b692f806f9140c2d2777410d7a1/recordings/2_jackson_0.wav",
+      "sha256": "214bac0c813b584410e3cb8cace2673d256b3fd735810bd516b2bfd0c2298620"
+    },
+    {
+      "file": "3_jackson_0.wav",
+      "url": "https://raw.githubusercontent.com/Jakobovski/free-spoken-digit-dataset/26eb9aaf76e81b692f806f9140c2d2777410d7a1/recordings/3_jackson_0.wav",
+      "sha256": "5152a17feb7dba43cfabdb4284262004da3038d5c02a6a5282e851b7ad2bb2e2"
+    }
+  ],
+  "fixture": {
+    "sample_count": 40028,
+    "pcm16le_sha256": "301b1b78e6d46bb58e4152ee8801020eee456bbe07d9244783fea31f0c09f87c"
+  }
+}
