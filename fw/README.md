@@ -1,10 +1,12 @@
 ## Audio output bring-up
 
+The queued playback service is documented in [Audio playback library](docs/audio_playback_service.md),
+including its producer API, lifecycle, overflow policy, and software checks.
+
 The speaker/I2S wrapper and a standalone tone harness are
 implemented in `lib/audio/audio_output.c/.h` and
 `test/test_148_audio_output/test_main.c`. See [audio playback bring-up](docs/audio_playback.md)
-for API contracts, provisional wiring, build/upload commands, host checks, and
-pending hardware validation. The normal environment still runs the blink app.
+for API contracts, wiring, build/upload commands, and host checks. The normal environment still runs the blink app.
 
 ## Intended Directory Structure
 
@@ -34,6 +36,6 @@ fw/
 
 `src/idf_component.yml` declares ESP-IDF managed dependencies, such as Mesh-Lite, when they are added.
 
-Capture, the queued playback service, and networking shown above are planned;
-their source files are not yet present on `main`. The audio component is
+The queued playback service is implemented on this feature branch.
+Capture and networking shown above remain separate work. The audio component is
 explicitly registered through CMake, including its ESP-IDF driver dependencies.
