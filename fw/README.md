@@ -3,6 +3,9 @@
 The queued playback service is documented in [Audio playback library](docs/audio_playback_service.md),
 including its producer API, lifecycle, overflow policy, and software checks.
 
+Run prerecorded speech validation with `audio_playback_test`; see
+[Audio playback test](docs/audio_playback_test.md) for commands and hardware results.
+
 The speaker/I2S wrapper and a standalone tone harness are
 implemented in `lib/audio/audio_output.c/.h` and
 `test/test_148_audio_output/test_main.c`. See [audio playback bring-up](docs/audio_playback.md)
