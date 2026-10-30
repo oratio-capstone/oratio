@@ -9,4 +9,5 @@ sdkconfig.*.old
 __pycache__/
 *.log
 .vscode/
+sdkconfig.audio_playback_test
 sdkconfig.audio_playback_smoke
