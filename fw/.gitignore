@@ -4,3 +4,9 @@
 .ccls
 compile_commands.json
 .cache/clangd/
+sdkconfig.audio_output_test
+sdkconfig.*.old
+__pycache__/
+*.log
+.vscode/
+sdkconfig.audio_playback_smoke
