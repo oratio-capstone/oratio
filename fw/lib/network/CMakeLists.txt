@@ -1,9 +1,9 @@
 idf_component_register(
     SRCS "network.c"
     INCLUDE_DIRS "."
-    REQUIRES esp_common freertos
+    REQUIRES esp_common freertos audio
     PRIV_REQUIRES
-        nvs_flash
+        storage
         esp_netif
         esp_event
         esp_wifi
