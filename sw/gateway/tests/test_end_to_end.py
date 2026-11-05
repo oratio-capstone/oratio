@@ -1,0 +1,62 @@
+"""Simulator -> UDP stand-in -> queues -> WebSocket server -> browser client, all on localhost."""
+
+import asyncio
+import json
+import sys
+from pathlib import Path
+
+import pytest
+from websockets.asyncio.client import connect
+
+import udp_devserver
+from ws_server import WebSocketServer
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
+import sim_nodes  # noqa: E402
+
+
+@pytest.mark.asyncio
+async def test_simulated_nodes_show_up_and_drop():
+    q_in: asyncio.Queue = asyncio.Queue(maxsize=200)
+    q_out: asyncio.Queue = asyncio.Queue(maxsize=200)
+    ws = WebSocketServer(q_in, q_out)
+    server = await ws.start("127.0.0.1", 0)
+    ws_port = server.sockets[0].getsockname()[1]
+    udp = await udp_devserver.start(q_in, q_out, "127.0.0.1", 0, timeout=0.5)
+    udp_port = udp.port
+
+    args = sim_nodes.argparse.Namespace(host="127.0.0.1", port=udp_port, nodes=3, talkers=1, heartbeat=0.1,
+                                        drop=["2:0.3"], sos=["3:0.2"], duration=2.0, seed=1)
+    sim = asyncio.create_task(sim_nodes.run(args))
+    try:
+        async with connect(f"ws://127.0.0.1:{ws_port}/ws") as client:
+            await client.recv()  # snapshot
+            await client.send(json.dumps({"type": "listen", "node_id": 1}))
+            seen, statuses, alerts, audio_frames = set(), {}, set(), 0
+            deadline = asyncio.get_running_loop().time() + 1.8
+            while asyncio.get_running_loop().time() < deadline:
+                try:
+                    msg = await asyncio.wait_for(client.recv(), 0.2)
+                except asyncio.TimeoutError:
+                    continue
+                if isinstance(msg, bytes):
+                    audio_frames += 1
+                    assert len(msg) == 2 + 640
+                    continue
+                data = json.loads(msg)
+                if data["type"] == "node_update":
+                    seen.add(data["node"]["node_id"])
+                    statuses[data["node"]["node_id"]] = data["node"]["status"]
+                elif data["type"] == "alert":
+                    alerts.add((data["alert"]["kind"], data["alert"]["node_id"]))
+        assert seen == {1, 2, 3}
+        assert statuses[2] == "dropped"
+        assert ("node_dropped", 2) in alerts and ("sos", 3) in alerts
+        assert audio_frames > 10  # node 1 talks at 50 frames/s
+    finally:
+        sim.cancel()
+        for task in udp._tasks:
+            task.cancel()
+        ws._consumer.cancel()
+        server.close()
+        await server.wait_closed()

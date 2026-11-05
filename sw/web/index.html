@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Oratio dashboard</title>
+  <link rel="stylesheet" href="styles.css">
+  <script>
+    // Apply the saved theme before the page draws, so it doesn't flash light first.
+    try {
+      const t = localStorage.getItem("oratio-theme");
+      if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+    } catch (e) {}
+  </script>
+</head>
+<body>
+  <header>
+    <h1>Oratio</h1>
+    <span id="conn" class="pill">connecting…</span>
+    <button id="theme" title="Switch between automatic, light and dark">Theme: auto</button>
+  </header>
+
+  <section>
+    <h2>Nodes <span id="counts" class="muted"></span></h2>
+    <table>
+      <thead>
+        <tr><th>Person / node</th><th>Status</th><th title="Signal strength to the node's parent in the mesh (RSSI). Closer to 0 is stronger: above -67 good, -67 to -80 weak, below -80 poor.">Link (dBm)</th><th>Position (m)</th><th>Last seen</th><th>Audio</th></tr>
+      </thead>
+      <tbody id="nodes"><tr><td colspan="6" class="muted">Waiting for nodes…</td></tr></tbody>
+    </table>
+  </section>
+
+  <section id="listening-section" hidden>
+    <h2>Listening</h2>
+    <div id="waves"></div>
+  </section>
+
+  <section>
+    <h2>Alerts</h2>
+    <ul id="alerts"><li class="muted">No alerts</li></ul>
+  </section>
+
+  <script src="app.js"></script>
+</body>
+</html>
