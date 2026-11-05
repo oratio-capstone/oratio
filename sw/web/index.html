@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Oratio dashboard</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header>
+    <h1>Oratio</h1>
+    <span id="conn" class="pill">connecting…</span>
+  </header>
+
+  <section>
+    <h2>Nodes <span id="counts" class="muted"></span></h2>
+    <table>
+      <thead>
+        <tr><th>Node</th><th>Status</th><th>Link (dBm)</th><th>Position (m)</th><th>Last seen</th><th>Audio</th></tr>
+      </thead>
+      <tbody id="nodes"><tr><td colspan="6" class="muted">Waiting for nodes…</td></tr></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Alerts</h2>
+    <ul id="alerts"><li class="muted">No alerts</li></ul>
+  </section>
+
+  <script src="app.js"></script>
+</body>
+</html>
