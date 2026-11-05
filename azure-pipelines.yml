@@ -12,9 +12,11 @@ pool:
   vmImage: 'ubuntu-latest'
 
 steps:
+# Pinned: '3.x' now resolves to Python 3.15 on ubuntu-latest, and the
+# espressif32 platform only supports Python 3.10-3.14.
 - task: UsePythonVersion@0
   inputs:
-    versionSpec: '3.x'
+    versionSpec: '3.12'
   displayName: 'Set up Python'
 
 # Pin the toolchain so builds don't break when upstream releases change.
