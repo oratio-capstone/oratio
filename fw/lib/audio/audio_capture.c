@@ -1,9 +1,15 @@
 #include "audio_capture.h"
 
+#include <stdbool.h>
+
 #include "audio_common.h"
+#include "driver/gpio.h"
 #include "driver/i2s_std.h"
 #include "esp_log.h"
 #include "freertos/task.h"
+
+// Push-to-talk button: one leg to this GPIO, the other to GND. Internal pull-up, so pressed reads 0.
+#define AUDIO_CAPTURE_PTT_GPIO GPIO_NUM_10
 
 static const char *TAG = "AUDIO_CAPTURE";
 
@@ -116,6 +122,18 @@ esp_err_t audio_capture_close(void)
     return ESP_OK;
 }
 
+static esp_err_t ptt_button_init(void)
+{
+    const gpio_config_t button_cfg = {
+        .pin_bit_mask = 1ULL << AUDIO_CAPTURE_PTT_GPIO,
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    return gpio_config(&button_cfg);
+}
+
 static void capture_task(void *arg)
 {
     (void)arg;
@@ -123,14 +141,28 @@ static void capture_task(void *arg)
     uint32_t frames = 0;
     uint32_t dropped = 0;
     uint32_t errors = 0;
+    bool was_talking = false;
 
     while (true)
     {
-        // 1. Read one 20 ms frame (blocks until it has arrived).
+        // 1. Read one 20 ms frame (blocks until it has arrived). Always read, even with the button up,
+        //    so the I2S buffers never fill with old audio.
         if (audio_capture_read(s_frame.samples, AUDIO_SAMPLES_PER_FRAME) != ESP_OK)
         {
             errors++;
             vTaskDelay(1); // don't spin if the driver keeps failing
+            continue;
+        }
+
+        // Push-to-talk: only send audio while the button is held down.
+        const bool talking = (gpio_get_level(AUDIO_CAPTURE_PTT_GPIO) == 0);
+        if (talking != was_talking)
+        {
+            ESP_LOGI(TAG, "PTT %s", talking ? "down: sending audio" : "up: muted");
+            was_talking = talking;
+        }
+        if (!talking)
+        {
             continue;
         }
 
@@ -162,6 +194,13 @@ esp_err_t audio_capture_task_start(MessageBufferHandle_t output)
     if (s_rx_handle == NULL || s_output != NULL)
     {
         return ESP_ERR_INVALID_STATE; // open first, and only start once
+    }
+
+    esp_err_t err = ptt_button_init();
+    if (err != ESP_OK)
+    {
+        ESP_LOGE(TAG, "PTT button setup failed: %s", esp_err_to_name(err));
+        return err;
     }
 
     s_output = output;

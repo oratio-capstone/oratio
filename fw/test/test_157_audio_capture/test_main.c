@@ -1,5 +1,5 @@
 // AB#157 capture test: plays the network task's role and prints a live level bar.
-// Run: pio run -e audio_capture_test -t upload -t monitor, then talk or clap near the mic.
+// Run: pio run -e audio_capture_test -t upload -t monitor, then hold the PTT button (GPIO 10) and talk.
 #include <stdint.h>
 #include <string.h>
 
