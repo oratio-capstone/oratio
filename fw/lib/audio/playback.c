@@ -53,7 +53,11 @@ esp_err_t playback_task_start(MessageBufferHandle_t input)
         return ESP_ERR_INVALID_STATE;
     }
     // The agreed core-1 affinity applies to S3; C3 has only core 0.
-    const BaseType_t core = CONFIG_FREERTOS_UNICORE ? 0 : 1;
+#if CONFIG_FREERTOS_UNICORE
+    const BaseType_t core = 0;
+#else
+    const BaseType_t core = 1;
+#endif
     return xTaskCreatePinnedToCore(playback_task, "playback", 3072, input,
                                   tskIDLE_PRIORITY + 2, &s_task, core) == pdPASS
                ? ESP_OK : ESP_ERR_NO_MEM;
