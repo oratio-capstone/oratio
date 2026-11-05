@@ -69,3 +69,57 @@ esp_err_t audio_output_open(void)
     }
     return result;
 }
+
+esp_err_t audio_output_write(const int16_t *samples, size_t sample_count)
+{
+    if (samples == NULL || sample_count == 0 || sample_count > AUDIO_SAMPLES_PER_FRAME)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!s_running)
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    size_t written = 0;
+    const size_t bytes = sample_count * sizeof(*samples);
+    const esp_err_t result = i2s_channel_write(s_tx, samples, bytes, &written, 1000);
+    return result != ESP_OK ? result : (written == bytes ? ESP_OK : ESP_FAIL);
+}
+
+esp_err_t audio_output_set_enabled(bool enabled)
+{
+    if (!s_running)
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+    return gpio_set_level(AUDIO_OUTPUT_SD_MODE_GPIO, enabled);
+}
+
+esp_err_t audio_output_close(void)
+{
+    if (s_tx == NULL)
+    {
+        return ESP_OK;
+    }
+    esp_err_t result = gpio_set_level(AUDIO_OUTPUT_SD_MODE_GPIO, 0);
+    if (result != ESP_OK)
+    {
+        return result;
+    }
+    if (s_running)
+    {
+        result = i2s_channel_disable(s_tx);
+        if (result != ESP_OK)
+        {
+            return result;
+        }
+        s_running = false;
+    }
+    result = i2s_del_channel(s_tx);
+    if (result == ESP_OK)
+    {
+        s_tx = NULL;
+    }
+    return result;
+}
