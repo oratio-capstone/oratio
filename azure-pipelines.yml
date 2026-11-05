@@ -17,9 +17,17 @@ steps:
     versionSpec: '3.x'
   displayName: 'Set up Python'
 
+# Pin the toolchain so builds don't break when upstream releases change.
+# pioarduino 6.2.0.post1 (published 2026-10-26) is rejected by the espressif32
+# platform's engine check ("not compatible with PlatformIO Core v6.2.0-post.1"),
+# so the platform's own Python env is constrained to 6.2.0 via UV_CONSTRAINT.
+# See pioarduino/platform-espressif32#563. Remove the constraint once a platform
+# release with the engine fix is pinned in fw/platformio.ini.
 - script: |
-    pip install -U platformio
-  displayName: 'Install PlatformIO'
+    pip install "platformio==6.2.0"
+    echo "pioarduino==6.2.0" > "$(Agent.TempDirectory)/pio-constraints.txt"
+    echo "##vso[task.setvariable variable=UV_CONSTRAINT]$(Agent.TempDirectory)/pio-constraints.txt"
+  displayName: 'Install PlatformIO (pinned)'
 
 - script: |
     pio run -e esp32-c3-devkitm-1
