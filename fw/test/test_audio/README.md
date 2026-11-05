@@ -35,7 +35,10 @@ After confirming wiring and the current serial port:
 pio test -e audio_test --upload-port COM6 --test-port COM6
 ```
 
-Replace COM6 with the actual port. Expect three Unity cases: argument/state
+Replace COM6 with the actual port. Tests use the Super Mini's native USB console
+(4 MB flash test defaults). The
+normal build retains main's configuration, including its existing 2 MB warning.
+Expect three Unity cases: argument/state
 checks, direct output, and buffered playback. Listen for a quiet 500 Hz tone,
 amplifier shutdown, then buffered tone with a one-second producer pause and
 recovery. Half-length frames should retain the same pitch. Confirm no repeated
