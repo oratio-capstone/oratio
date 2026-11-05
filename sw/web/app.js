@@ -41,7 +41,7 @@ function connect() {
       alerts.push(msg.alert);
       alerts = alerts.slice(-50);
     }
-    render();
+    scheduleRender();
   };
 }
 
@@ -57,7 +57,7 @@ function toggleListen(id) {
     listening.add(id);
     send({ type: "listen", node_id: id });
   }
-  render();
+  scheduleRender();
 }
 
 function setConn(text, cls) {
@@ -70,32 +70,56 @@ function ago(ts) {
   return s < 60 ? `${s.toFixed(0)} s ago` : `${(s / 60).toFixed(0)} min ago`;
 }
 
-function render() {
-  const rows = [...nodes.values()].sort((a, b) => a.node_id - b.node_id);
-  const active = rows.filter((n) => n.status === "active").length;
-  $("counts").textContent = rows.length ? `${active} active / ${rows.length}` : "";
-  const body = $("nodes");
-  body.replaceChildren();
-  if (!rows.length) {
-    body.innerHTML = '<tr><td colspan="6" class="muted">Waiting for nodes…</td></tr>';
+// Rows are created once per node and then updated in place. Rebuilding the table on every
+// update replaced the buttons several times a second, so clicks landing between mouse-down and
+// mouse-up were lost.
+const rows = new Map();  // node_id -> { tr, cells: [td...], button }
+let renderQueued = false;
+
+function scheduleRender() {
+  if (!renderQueued) {
+    renderQueued = true;
+    requestAnimationFrame(() => { renderQueued = false; render(); });
   }
-  for (const n of rows) {
+}
+
+function rowFor(id) {
+  let row = rows.get(id);
+  if (!row) {
     const tr = document.createElement("tr");
-    const pos = n.pos ? `${n.pos[0].toFixed(1)}, ${n.pos[1].toFixed(1)}` : "–";
-    const cells = [n.node_id, n.status, n.link ?? "–", pos, ago(n.last_seen)];
-    cells.forEach((value, i) => {
-      const td = document.createElement("td");
-      td.textContent = value;
-      if (i === 1) td.className = `status-${n.status}`;
-      tr.appendChild(td);
-    });
-    const td = document.createElement("td");
+    const cells = Array.from({ length: 5 }, () => tr.appendChild(document.createElement("td")));
     const button = document.createElement("button");
-    button.textContent = listening.has(n.node_id) ? `Stop (${frames.get(n.node_id) || 0})` : "Listen";
-    button.onclick = () => toggleListen(n.node_id);
-    td.appendChild(button);
-    tr.appendChild(td);
-    body.appendChild(tr);
+    button.dataset.node = id;
+    tr.appendChild(document.createElement("td")).appendChild(button);
+    row = { tr, cells, button };
+    rows.set(id, row);
+  }
+  return row;
+}
+
+function render() {
+  const sorted = [...nodes.values()].sort((a, b) => a.node_id - b.node_id);
+  const active = sorted.filter((n) => n.status === "active").length;
+  $("counts").textContent = sorted.length ? `${active} active / ${sorted.length}` : "";
+
+  const body = $("nodes");
+  if (!sorted.length) {
+    rows.clear();
+    body.innerHTML = '<tr><td colspan="6" class="muted">Waiting for nodes…</td></tr>';
+  } else {
+    if (!rows.size) body.replaceChildren();  // remove the "waiting" row once
+    sorted.forEach((n, index) => {
+      const { tr, cells, button } = rowFor(n.node_id);
+      const pos = n.pos ? `${n.pos[0].toFixed(1)}, ${n.pos[1].toFixed(1)}` : "–";
+      const values = [n.node_id, n.status, n.link ?? "–", pos, ago(n.last_seen)];
+      values.forEach((value, i) => {
+        if (cells[i].textContent !== String(value)) cells[i].textContent = value;
+      });
+      cells[1].className = `status-${n.status}`;
+      const label = listening.has(n.node_id) ? `Stop (${frames.get(n.node_id) || 0})` : "Listen";
+      if (button.textContent !== label) button.textContent = label;
+      if (body.children[index] !== tr) body.insertBefore(tr, body.children[index] || null);
+    });
   }
 
   const list = $("alerts");
@@ -109,5 +133,11 @@ function render() {
   }
 }
 
-setInterval(render, 1000);  // keep "last seen" fresh
+// One click handler for the whole table, so it survives row updates.
+$("nodes").addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-node]");
+  if (button) toggleListen(Number(button.dataset.node));
+});
+
+setInterval(scheduleRender, 1000);  // keep "last seen" fresh
 connect();

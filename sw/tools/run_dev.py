@@ -17,6 +17,7 @@ Usage (with the environment activated, from anywhere):
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -46,7 +47,16 @@ def _start(name: str, args: list[str], cwd: Path) -> subprocess.Popen:
     return proc
 
 
+def _stop_on_signal(signum, frame) -> None:
+    raise KeyboardInterrupt
+
+
 def main() -> int:
+    # Make Ctrl+C work even if the parent shell started us with SIGINT ignored,
+    # and stop cleanly on a normal kill (SIGTERM) too.
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+    if hasattr(signal, "SIGTERM"):
+        signal.signal(signal.SIGTERM, _stop_on_signal)
     argv = sys.argv[1:]
     run_sim = "--no-sim" not in argv
     open_browser = "--no-browser" not in argv
