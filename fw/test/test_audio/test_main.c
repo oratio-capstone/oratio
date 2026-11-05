@@ -97,6 +97,8 @@ static void test_buffered_playback(void)
 void app_main(void)
 {
     vTaskDelay(pdMS_TO_TICKS(2000));
+    ESP_LOGI(TAG, "Target=%s, speaker I2S%d, configured cores=%d", CONFIG_IDF_TARGET,
+             AUDIO_OUTPUT_I2S_PORT, portNUM_PROCESSORS);
     ESP_LOGI(TAG, "Listen for direct tone, amp shutdown, buffered tone, pause and recovery");
     UNITY_BEGIN();
     RUN_TEST(test_output_contract);
