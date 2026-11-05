@@ -36,7 +36,7 @@ Pi from your Wi-Fi. **Do step 4 over Ethernet or with a monitor and keyboard.**
 | Script | What it does | Run as |
 | --- | --- | --- |
 | `01-base.sh` | Updates packages, installs git / Python venv / pip, sets the console keyboard to US | `sudo` |
-| `02-gateway.sh` | Clones or updates the repo, creates the virtual environment, installs `sw/requirements.txt` if it exists | `sudo` |
+| `02-gateway.sh` | Clones or updates the repo, creates the virtual environment at `~/oratio-venv`, installs the pinned packages in `sw/requirements.txt` | `sudo` |
 | `03-services.sh` | Installs and starts `oratio-gateway` (and `oratio-web` once `sw/web/` exists) as systemd services: restart on failure, start at boot, unbuffered logs | `sudo` |
 | `04-access-point.sh` | Creates the `oratio-gw` access point: 2.4 GHz, channel 6, `192.168.4.1/24`, DHCP, starts at boot. Asks for the Wi-Fi password | `sudo` |
 | `maintenance-mode.sh` | `home` joins a normal Wi-Fi network for updates, `ap` returns to the access point, `status` shows which is active | `sudo` (except `status`) |

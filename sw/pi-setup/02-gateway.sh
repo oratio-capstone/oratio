@@ -18,6 +18,9 @@ else
   as_app_user git clone --branch "$REPO_BRANCH" "$REPO_URL" "$REPO_DIR"
 fi
 
+python3 -c 'import sys; sys.exit(sys.version_info < (3, 11))' \
+  || die "Python 3.11 or newer is required (found $(python3 --version))"
+
 if [[ ! -x "$VENV_DIR/bin/python" ]]; then
   log "Creating virtual environment at $VENV_DIR"
   as_app_user python3 -m venv "$VENV_DIR"
@@ -31,7 +34,7 @@ if [[ -f "$REQS" ]]; then
   log "Installing Python dependencies from sw/requirements.txt"
   as_app_user "$VENV_DIR/bin/pip" install --upgrade -r "$REQS"
 else
-  log "No sw/requirements.txt yet; the current server only uses the standard library"
+  log "No sw/requirements.txt on this branch; skipping Python dependencies"
 fi
 
 log "Gateway code ready"
