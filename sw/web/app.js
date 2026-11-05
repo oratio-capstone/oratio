@@ -1,4 +1,6 @@
 // Live view for the gateway WebSocket server (starting point for task 128).
+// Nodes can be renamed (✎) to the person wearing them; names are stored on the gateway and
+// shared by every dashboard.
 // Connects to ws://<same host>:8000/ws, shows nodes and alerts, reconnects automatically.
 // "Listen" streams a node's audio frames and draws them as a live waveform.
 // Sound playback isn't implemented yet.
@@ -99,7 +101,7 @@ function makeWaveCard(id) {
   card.className = "wave-card";
   card.innerHTML = `
     <div class="wave-head">
-      <strong>Node ${id}</strong>
+      <strong class="wave-name"></strong>
       <span class="wave-stat muted"></span>
       <button data-node="${id}">Stop</button>
     </div>
@@ -119,7 +121,7 @@ function drawWaves() {
   const quiet = styles.getPropertyValue("--line").trim();
   const now = performance.now();
 
-  for (const [, stream] of listening) {
+  for (const [id, stream] of listening) {
     const canvas = stream.card.querySelector("canvas");
     const dpr = window.devicePixelRatio || 1;
     const w = canvas.clientWidth, h = canvas.clientHeight;
@@ -145,6 +147,9 @@ function drawWaves() {
       ctx.fillRect(w - (i + 1) * step, mid - half, barWidth, half * 2);
     }
 
+    const title = displayName(id);
+    const nameEl = stream.card.querySelector(".wave-name");
+    if (nameEl.textContent !== title) nameEl.textContent = title;
     stream.card.querySelector(".wave-stat").textContent =
       silent && stream.frames ? `${seconds(stream)} s · no audio`
         : silent ? "waiting for audio…" : `${seconds(stream)} s received`;
@@ -181,6 +186,11 @@ function ago(ts) {
   return s < 60 ? `${s.toFixed(0)} s ago` : `${(s / 60).toFixed(0)} min ago`;
 }
 
+// Name shown for a node: the person's name if one was given, otherwise "Node 3".
+function displayName(id) {
+  return nodes.get(id)?.name || `Node ${id}`;
+}
+
 function rowFor(id) {
   let row = rows.get(id);
   if (!row) {
@@ -189,10 +199,61 @@ function rowFor(id) {
     const button = document.createElement("button");
     button.dataset.node = id;
     tr.appendChild(document.createElement("td")).appendChild(button);
-    row = { tr, cells, button };
+    row = { tr, cells, button, nameEl: null, idEl: null };
     rows.set(id, row);
+    buildNameCell(row, id);
   }
   return row;
+}
+
+// First cell: "Alex · node 3" (or "Node 3") and a rename button.
+function buildNameCell(row, id) {
+  const nameEl = document.createElement("span");
+  nameEl.className = "name";
+  const idEl = document.createElement("span");
+  idEl.className = "muted";
+  const rename = document.createElement("button");
+  rename.className = "rename";
+  rename.dataset.rename = id;
+  rename.title = "Rename";
+  rename.setAttribute("aria-label", `Rename node ${id}`);
+  rename.textContent = "✎";
+  row.cells[0].replaceChildren(nameEl, idEl, rename);
+  row.nameEl = nameEl;
+  row.idEl = idEl;
+}
+
+// ---- renaming --------------------------------------------------------------------
+
+let editingId = null;
+
+function startRename(id) {
+  if (editingId !== null) return;
+  editingId = id;
+  const row = rows.get(id);
+  const input = document.createElement("input");
+  input.className = "name-input";
+  input.maxLength = 32;
+  input.placeholder = "Name, e.g. Alex";
+  input.value = nodes.get(id)?.name || "";
+  input.setAttribute("aria-label", `Name for node ${id}`);
+  let done = false;
+  const finish = (save) => {
+    if (done) return;
+    done = true;
+    if (save) send({ type: "rename", node_id: id, name: input.value.trim() });
+    editingId = null;
+    buildNameCell(row, id);
+    scheduleRender();
+  };
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") finish(true);
+    if (event.key === "Escape") finish(false);
+  });
+  input.addEventListener("blur", () => finish(true));
+  row.cells[0].replaceChildren(input);
+  input.focus();
+  input.select();
 }
 
 function render() {
@@ -207,12 +268,19 @@ function render() {
   } else {
     if (!rows.size) body.replaceChildren();  // remove the "waiting" row once
     sorted.forEach((n, index) => {
-      const { tr, cells, button } = rowFor(n.node_id);
+      const row = rowFor(n.node_id);
+      const { tr, cells, button } = row;
       const pos = n.pos ? `${n.pos[0].toFixed(1)}, ${n.pos[1].toFixed(1)}` : "–";
       const link = linkQuality(n.link);
-      const values = [n.node_id, n.status, link.text, pos, ago(n.last_seen)];
+      if (editingId !== n.node_id) {
+        const name = displayName(n.node_id);
+        const suffix = n.name ? ` · node ${n.node_id}` : "";
+        if (row.nameEl.textContent !== name) row.nameEl.textContent = name;
+        if (row.idEl.textContent !== suffix) row.idEl.textContent = suffix;
+      }
+      const values = [null, n.status, link.text, pos, ago(n.last_seen)];
       values.forEach((value, i) => {
-        if (cells[i].textContent !== String(value)) cells[i].textContent = value;
+        if (i > 0 && cells[i].textContent !== String(value)) cells[i].textContent = value;
       });
       cells[1].className = `status-${n.status}`;
       // A dropped node's last reading is stale, so it is shown greyed out.
@@ -239,6 +307,11 @@ function render() {
 // One click handler each for the table and the waveform cards, so they survive updates.
 for (const container of [$("nodes"), $("waves")]) {
   container.addEventListener("click", (event) => {
+    const rename = event.target.closest("button[data-rename]");
+    if (rename) {
+      startRename(Number(rename.dataset.rename));
+      return;
+    }
     const button = event.target.closest("button[data-node]");
     if (button) toggleListen(Number(button.dataset.node));
   });

@@ -26,4 +26,8 @@ CLIENT_BUFFER = int(_get("CLIENT_BUFFER", "128"))
 # How many recent alerts a newly opened dashboard receives.
 ALERT_HISTORY = int(_get("ALERT_HISTORY", "50"))
 
+# Node names given on the dashboard (e.g. who is wearing each device). Kept outside the repo.
+NAMES_FILE = _get("NAMES_FILE", os.path.join(os.path.expanduser("~"), ".local", "share", "oratio",
+                                             "node-names.json"))
+
 LOG_LEVEL = _get("LOG_LEVEL", "INFO")

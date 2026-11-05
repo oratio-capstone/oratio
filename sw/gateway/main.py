@@ -24,7 +24,8 @@ async def main() -> None:
     q_out: asyncio.Queue = asyncio.Queue(maxsize=config.QUEUE_SIZE)
 
     ws = WebSocketServer(q_in, q_out, path=config.WS_PATH,
-                         client_buffer=config.CLIENT_BUFFER, alert_history=config.ALERT_HISTORY)
+                         client_buffer=config.CLIENT_BUFFER, alert_history=config.ALERT_HISTORY,
+                         names_file=config.NAMES_FILE)
     await ws.start(config.WS_HOST, config.WS_PORT)
     await udp_devserver.start(q_in, q_out, config.UDP_HOST, config.UDP_PORT,
                               timeout=config.HEARTBEAT_TIMEOUT_S)

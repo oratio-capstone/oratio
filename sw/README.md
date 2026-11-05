@@ -75,7 +75,12 @@ python -m http.server 8080 --directory sw/web
 python sw/tools/sim_nodes.py --talkers 1 --drop 3:10 --sos 5:15
 ```
 
-Settings (ports, timeouts, queue sizes) are in `gateway/config.py` and can be overridden with
+Nodes can be renamed from the dashboard (✎ next to each node), for example to the person wearing the
+device. Names are shared by every open dashboard and saved on the gateway in
+`~/.local/share/oratio/node-names.json` (outside the repo), so they survive restarts. Clear a name to
+go back to "Node 3".
+
+Settings (ports, timeouts, queue sizes, names file) are in `gateway/config.py` and can be overridden with
 environment variables, for example `WS_PORT=9000 python sw/gateway/main.py`.
 
 `gateway/udp_devserver.py` is a **temporary stand-in** for the UDP side: it tracks nodes and feeds

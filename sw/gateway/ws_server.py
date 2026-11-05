@@ -11,6 +11,10 @@ Browser protocol (all text frames are JSON):
                         binary: 2-byte node_id (big-endian) + 16-bit PCM, for nodes being listened to
     browser -> server   {"type": "listen", "node_id": 3}
                         {"type": "stop", "node_id": 3}   (or without node_id: stop everything)
+                        {"type": "rename", "node_id": 3, "name": "Alex"}   ("" clears the name)
+
+Node names (e.g. the person wearing the device) are shared by every dashboard and
+saved to a small JSON file, so they survive a gateway restart.
 """
 
 from __future__ import annotations
@@ -19,7 +23,10 @@ import asyncio
 import collections
 import json
 import logging
+import os
 import time
+import unicodedata
+from pathlib import Path
 from typing import Any
 
 from websockets.asyncio.server import Server, ServerConnection, serve
@@ -28,6 +35,16 @@ from websockets.exceptions import ConnectionClosed
 import messages
 
 log = logging.getLogger("ws")
+
+MAX_NAME_LENGTH = 32
+
+
+def clean_name(name: Any) -> str:
+    """Trim, drop control characters and limit length. Returns "" for no name."""
+    if not isinstance(name, str):
+        return ""
+    name = "".join(ch for ch in name if unicodedata.category(ch)[0] != "C")
+    return " ".join(name.split())[:MAX_NAME_LENGTH]
 
 
 class _Client:
@@ -39,7 +56,8 @@ class _Client:
 
 class WebSocketServer:
     def __init__(self, q_in: asyncio.Queue, q_out: asyncio.Queue, *, path: str = "/ws",
-                 client_buffer: int = 128, alert_history: int = 50) -> None:
+                 client_buffer: int = 128, alert_history: int = 50,
+                 names_file: str | Path | None = None) -> None:
         self.q_in = q_in
         self.q_out = q_out
         self.path = path
@@ -48,6 +66,8 @@ class WebSocketServer:
         self.alerts: collections.deque[dict[str, Any]] = collections.deque(maxlen=alert_history)
         self._clients: set[_Client] = set()
         self._listeners: collections.Counter[int] = collections.Counter()
+        self.names_file = Path(names_file) if names_file else None
+        self.names: dict[int, str] = self._load_names()
 
     # ---- running -------------------------------------------------------------
 
@@ -103,27 +123,71 @@ class WebSocketServer:
             if node and node["status"] != "dropped":
                 node["status"] = "dropped"
                 self._broadcast({"type": "node_update", "node": node})
-                self._alert("node_dropped", node_id, ts, f"Node {node_id} stopped responding")
+                self._alert("node_dropped", node_id, ts, f"{self.label(node_id)} stopped responding")
         elif kind == "sos":
             self._node(node_id, ts)
-            self._alert("sos", node_id, ts, f"SOS from node {node_id}")
+            self._alert("sos", node_id, ts, f"SOS from {self.label(node_id)}")
         else:
             log.debug("ignoring unknown event %r", event)
 
     def _node(self, node_id: int, ts: float) -> dict[str, Any]:
         node = self.nodes.get(node_id)
         if node is None:
-            node = {"node_id": node_id, "status": "new", "addr": None,
-                    "last_seen": ts, "link": None, "pos": None}
+            node = {"node_id": node_id, "name": self.names.get(node_id), "status": "new",
+                    "addr": None, "last_seen": ts, "link": None, "pos": None}
             self.nodes[node_id] = node
         return node
 
     def _mark_active(self, node: dict[str, Any], ts: float) -> None:
         if node["status"] == "dropped":
-            self._alert("node_rejoined", node["node_id"], ts, f"Node {node['node_id']} is back")
+            self._alert("node_rejoined", node["node_id"], ts, f"{self.label(node['node_id'])} is back")
         node["status"] = "active"
         node["last_seen"] = ts
         self._broadcast({"type": "node_update", "node": node})
+
+    def label(self, node_id: int) -> str:
+        """How a node is named in alerts: "Alex (node 3)", or "Node 3" without a name."""
+        name = self.names.get(node_id)
+        return f"{name} (node {node_id})" if name else f"Node {node_id}"
+
+    # ---- names ---------------------------------------------------------------
+
+    async def rename(self, node_id: int, name: Any) -> None:
+        name = clean_name(name)
+        if self.names.get(node_id, "") == name:
+            return
+        if name:
+            self.names[node_id] = name
+        else:
+            self.names.pop(node_id, None)
+        log.info("node %d renamed to %r", node_id, name or None)
+        node = self.nodes.get(node_id)
+        if node is not None:
+            node["name"] = name or None
+            self._broadcast({"type": "node_update", "node": node})
+        await asyncio.to_thread(self._save_names, dict(self.names))  # file I/O off the event loop
+
+    def _load_names(self) -> dict[int, str]:
+        if not self.names_file or not self.names_file.exists():
+            return {}
+        try:
+            raw = json.loads(self.names_file.read_text(encoding="utf-8"))
+            return {int(k): clean_name(v) for k, v in raw.items() if clean_name(v)}
+        except (OSError, ValueError, AttributeError) as exc:
+            log.warning("could not read node names from %s: %s", self.names_file, exc)
+            return {}
+
+    def _save_names(self, names: dict[int, str]) -> None:
+        if not self.names_file:
+            return
+        try:
+            self.names_file.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.names_file.with_suffix(".tmp")
+            tmp.write_text(json.dumps({str(k): v for k, v in sorted(names.items())}, indent=2),
+                           encoding="utf-8")
+            os.replace(tmp, self.names_file)  # atomic: never leaves a half-written file
+        except OSError as exc:
+            log.warning("could not save node names to %s: %s", self.names_file, exc)
 
     def _alert(self, kind: str, node_id: int, ts: float, message: str) -> None:
         alert = {"kind": kind, "node_id": node_id, "ts": ts, "message": message}
@@ -189,6 +253,8 @@ class WebSocketServer:
             targets = [node_id] if isinstance(node_id, int) else list(client.listening)
             for target in targets:
                 await self._stop_listening(client, target)
+        elif cmd.get("type") == "rename" and isinstance(node_id, int):
+            await self.rename(node_id, cmd.get("name"))
 
     async def _start_listening(self, client: _Client, node_id: int) -> None:
         if node_id in client.listening:
