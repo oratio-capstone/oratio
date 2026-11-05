@@ -3,13 +3,22 @@
 #include "audio_common.h"
 #include "driver/i2s_std.h"
 #include "esp_log.h"
+#include "freertos/task.h"
 
 static const char *TAG = "AUDIO_CAPTURE";
+
+static const uint32_t SUMMARY_EVERY_FRAMES = 100; // one log line every 2 s (50 frames/s)
+static const uint32_t TASK_STACK_BYTES = 4096;
+static const UBaseType_t TASK_PRIORITY = 5;
+static const BaseType_t TASK_CORE = (portNUM_PROCESSORS > 1) ? 1 : 0; // core 1 on the S3; the C3 only has core 0
 
 static i2s_chan_handle_t s_rx_handle = NULL;
 
 // The INMP441 sends each 24-bit sample left-justified in a 32-bit I2S slot.
 static int32_t s_raw[AUDIO_SAMPLES_PER_FRAME];
+
+static MessageBufferHandle_t s_output = NULL;
+static audio_frame_t s_frame;
 
 esp_err_t audio_capture_open(void)
 {
@@ -104,5 +113,65 @@ esp_err_t audio_capture_close(void)
     }
 
     s_rx_handle = NULL;
+    return ESP_OK;
+}
+
+static void capture_task(void *arg)
+{
+    (void)arg;
+    uint16_t sequence = 0;
+    uint32_t frames = 0;
+    uint32_t dropped = 0;
+    uint32_t errors = 0;
+
+    while (true)
+    {
+        // 1. Read one 20 ms frame (blocks until it has arrived).
+        if (audio_capture_read(s_frame.samples, AUDIO_SAMPLES_PER_FRAME) != ESP_OK)
+        {
+            errors++;
+            vTaskDelay(1); // don't spin if the driver keeps failing
+            continue;
+        }
+
+        // 2. Number the frame. The sequence advances every frame, even if it gets dropped.
+        s_frame.sequence = sequence++;
+        s_frame.length = AUDIO_SAMPLES_PER_FRAME;
+
+        // 3. Hand it to the network task without waiting. If the buffer is full, drop and count it.
+        if (xMessageBufferSend(s_output, &s_frame, sizeof(s_frame), 0) != sizeof(s_frame))
+        {
+            dropped++;
+        }
+
+        frames++;
+        if (frames % SUMMARY_EVERY_FRAMES == 0)
+        {
+            ESP_LOGI(TAG, "frames=%lu dropped=%lu errors=%lu", (unsigned long)frames, (unsigned long)dropped,
+                     (unsigned long)errors);
+        }
+    }
+}
+
+esp_err_t audio_capture_task_start(MessageBufferHandle_t output)
+{
+    if (output == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (s_rx_handle == NULL || s_output != NULL)
+    {
+        return ESP_ERR_INVALID_STATE; // open first, and only start once
+    }
+
+    s_output = output;
+    if (xTaskCreatePinnedToCore(capture_task, "audio_capture", TASK_STACK_BYTES, NULL, TASK_PRIORITY, NULL,
+                                TASK_CORE) != pdPASS)
+    {
+        s_output = NULL;
+        return ESP_ERR_NO_MEM;
+    }
+
+    ESP_LOGI(TAG, "Capture task started on core %d", (int)TASK_CORE);
     return ESP_OK;
 }
