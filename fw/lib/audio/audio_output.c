@@ -5,6 +5,8 @@
 #include "esp_log.h"
 
 static const char *TAG = "AUDIO_OUTPUT";
+// One caller owns the driver: startup opens it, then playback is the sole writer.
+// Close is for standalone use or failed startup, never while playback is running.
 static i2s_chan_handle_t s_tx;
 static bool s_running;
 
@@ -15,6 +17,7 @@ esp_err_t audio_output_open(void)
         return ESP_ERR_INVALID_STATE;
     }
 
+    // Keep the amplifier off while configuring I2S; enable it only after startup succeeds.
     const gpio_config_t amp_config =
     {
         .pin_bit_mask = 1ULL << AUDIO_OUTPUT_SD_MODE_GPIO,
@@ -34,7 +37,7 @@ esp_err_t audio_output_open(void)
     i2s_chan_config_t channel = I2S_CHANNEL_DEFAULT_CONFIG(AUDIO_OUTPUT_I2S_PORT, I2S_ROLE_MASTER);
     channel.dma_desc_num = 4;
     channel.dma_frame_num = 80;
-    channel.auto_clear = true;
+    channel.auto_clear = true; // Clear transmitted DMA buffers to avoid replaying stale audio.
     result = i2s_new_channel(&channel, &s_tx, NULL);
     if (result != ESP_OK)
     {
@@ -89,6 +92,7 @@ esp_err_t audio_output_write(const int16_t *samples, size_t sample_count)
 
     size_t written = 0;
     const size_t bytes = sample_count * sizeof(*samples);
+    // Let I2S pace the samples, with a finite wait. Report incomplete writes without replaying the frame.
     const esp_err_t result = i2s_channel_write(s_tx, samples, bytes, &written, 1000);
     return result != ESP_OK ? result : (written == bytes ? ESP_OK : ESP_FAIL);
 }
@@ -108,6 +112,7 @@ esp_err_t audio_output_close(void)
     {
         return ESP_OK;
     }
+    // Shut down immediately; close does not wait for queued audio to become audible.
     esp_err_t result = gpio_set_level(AUDIO_OUTPUT_SD_MODE_GPIO, 0);
     if (result != ESP_OK)
     {

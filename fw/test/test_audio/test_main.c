@@ -35,6 +35,7 @@ static void test_direct_tone(void)
     }
     TEST_ASSERT_EQUAL(ESP_OK, audio_output_open());
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_STATE, audio_output_open());
+    // Three seconds of tone, then one second of writes with the amplifier disabled.
     for (size_t frame = 0; frame < 150; frame++)
     {
         TEST_ASSERT_EQUAL(ESP_OK, audio_output_write(samples, AUDIO_SAMPLES_PER_FRAME));
@@ -76,6 +77,7 @@ static void test_buffered_playback(void)
             vTaskDelay(pdMS_TO_TICKS(1000)); // Listener checks silence and later recovery.
         }
     }
+    // Invalid lengths and a truncated message must not prevent the next valid frame being consumed.
     frame.length = AUDIO_SAMPLES_PER_FRAME + 1;
     TEST_ASSERT_EQUAL(sizeof(frame), xMessageBufferSend(input, &frame, sizeof(frame), pdMS_TO_TICKS(1000)));
     frame.length = 0;
@@ -89,7 +91,7 @@ static void test_buffered_playback(void)
         vTaskDelay(1);
     }
     TEST_ASSERT_TRUE(xMessageBufferIsEmpty(input));
-    // Queue drain proves consumption, not audible output or successful DMA writes.
+    // An empty message buffer proves consumption, not audible output or successful DMA writes.
 }
 
 void app_main(void)
@@ -99,6 +101,7 @@ void app_main(void)
     UNITY_BEGIN();
     RUN_TEST(test_output_contract);
     RUN_TEST(test_direct_tone);
+    // Run last: this test leaves the playback task and its input buffer alive until reboot.
     RUN_TEST(test_buffered_playback);
     UNITY_END();
 }

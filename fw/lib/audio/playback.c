@@ -6,6 +6,8 @@
 #include "freertos/task.h"
 
 static const char *TAG = "PLAYBACK";
+// Startup calls task_start once, after opening the driver. The caller retains
+// the input buffer for this task's lifetime and supplies exactly one producer.
 static TaskHandle_t s_task;
 
 static void playback_task(void *argument)
@@ -24,6 +26,8 @@ static void playback_task(void *argument)
             vTaskSuspend(NULL);
             continue;
         }
+        // Messages contain the whole struct; length counts valid samples, not bytes.
+        // Sequence is intentionally unused until packet reordering is introduced.
         if (received != sizeof(frame) || frame.length == 0 || frame.length > AUDIO_SAMPLES_PER_FRAME)
         {
             errors++;
