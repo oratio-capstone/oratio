@@ -232,5 +232,29 @@ for (const container of [$("nodes"), $("waves")]) {
   });
 }
 
+// ---- theme ---------------------------------------------------------------------
+// Cycles auto -> light -> dark. "auto" follows the computer's setting. Saved per device.
+
+const THEMES = ["auto", "light", "dark"];
+
+function currentTheme() {
+  return document.documentElement.dataset.theme || "auto";
+}
+
+function applyTheme(theme) {
+  if (theme === "auto") delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = theme;
+  $("theme").textContent = `Theme: ${theme}`;
+  try {
+    if (theme === "auto") localStorage.removeItem("oratio-theme");
+    else localStorage.setItem("oratio-theme", theme);
+  } catch (e) { /* storage unavailable (private window): the choice lasts until reload */ }
+}
+
+$("theme").addEventListener("click", () => {
+  applyTheme(THEMES[(THEMES.indexOf(currentTheme()) + 1) % THEMES.length]);
+});
+applyTheme(currentTheme());
+
 setInterval(scheduleRender, 250);  // keep "last seen" and the seconds counters fresh
 connect();

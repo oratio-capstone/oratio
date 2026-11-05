@@ -5,11 +5,19 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Oratio dashboard</title>
   <link rel="stylesheet" href="styles.css">
+  <script>
+    // Apply the saved theme before the page draws, so it doesn't flash light first.
+    try {
+      const t = localStorage.getItem("oratio-theme");
+      if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+    } catch (e) {}
+  </script>
 </head>
 <body>
   <header>
     <h1>Oratio</h1>
     <span id="conn" class="pill">connecting…</span>
+    <button id="theme" title="Switch between automatic, light and dark">Theme: auto</button>
   </header>
 
   <section>
