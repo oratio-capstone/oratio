@@ -12,14 +12,18 @@ pool:
   vmImage: 'ubuntu-latest'
 
 steps:
+# Pinned: '3.x' now resolves to Python 3.15 on ubuntu-latest, and the
+# espressif32 platform only supports Python 3.10-3.14.
 - task: UsePythonVersion@0
   inputs:
-    versionSpec: '3.x'
+    versionSpec: '3.12'
   displayName: 'Set up Python'
 
+# Pinned to match the platform in fw/platformio.ini (54.03.21-2 needs Core >= 6.1.18).
+# Upgrade both together, on purpose; never use "pip install -U".
 - script: |
-    pip install -U platformio
-  displayName: 'Install PlatformIO'
+    pip install "platformio==6.1.19"
+  displayName: 'Install PlatformIO (pinned)'
 
 - script: |
     pio run -e esp32-c3-devkitm-1
