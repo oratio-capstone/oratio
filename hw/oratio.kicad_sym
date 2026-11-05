@@ -29,10 +29,11 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "oratio:INMP441_Breakout"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
+			(hide yes)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -212,7 +213,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "oratio:MAX98357A_Breakout"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
