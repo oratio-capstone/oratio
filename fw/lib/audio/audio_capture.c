@@ -8,6 +8,9 @@ static const char *TAG = "AUDIO_CAPTURE";
 
 static i2s_chan_handle_t s_rx_handle = NULL;
 
+// The INMP441 sends each 24-bit sample left-justified in a 32-bit I2S slot.
+static int32_t s_raw[AUDIO_SAMPLES_PER_FRAME];
+
 esp_err_t audio_capture_open(void)
 {
     if (s_rx_handle != NULL)
@@ -53,6 +56,32 @@ esp_err_t audio_capture_open(void)
 
     ESP_LOGI(TAG, "Opened: %d Hz, SCK=%d WS=%d SD=%d", AUDIO_SAMPLE_RATE_HZ, AUDIO_CAPTURE_SCK_GPIO,
              AUDIO_CAPTURE_WS_GPIO, AUDIO_CAPTURE_SD_GPIO);
+    return ESP_OK;
+}
+
+esp_err_t audio_capture_read(int16_t *samples, size_t sample_count)
+{
+    if (samples == NULL || sample_count == 0 || sample_count > AUDIO_SAMPLES_PER_FRAME)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (s_rx_handle == NULL)
+    {
+        return ESP_ERR_INVALID_STATE; // call audio_capture_open first
+    }
+
+    // Blocks until all samples have arrived (20 ms for a full frame).
+    size_t bytes_read = 0;
+    esp_err_t err = i2s_channel_read(s_rx_handle, s_raw, sample_count * sizeof(int32_t), &bytes_read, portMAX_DELAY);
+    if (err != ESP_OK)
+    {
+        return err;
+    }
+
+    for (size_t i = 0; i < sample_count; i++)
+    {
+        samples[i] = (int16_t)(s_raw[i] >> 16); // keep the top 16 bits -> 16-bit PCM
+    }
     return ESP_OK;
 }
 
