@@ -67,5 +67,9 @@ Use a single producer/consumer per buffer and retain it for the task lifetime.
 
 The core-1 comment in playback.h applies to S3; the implementation uses core 0
 on single-core C3. Public headers remain unchanged for team review.
-Hardware tests are pending: the owner reports the board is not connected or
-rewired. No previous implementation's hardware result applies to this build.
+Validation on 2026-11-05: normal firmware and Unity firmware builds passed with
+ESP-IDF 5.5.5. The owner's PlatformIO screenshot confirms upload to COM6 and all
+three on-device tests passing: test_output_contract, test_direct_tone, and
+test_buffered_playback (3 succeeded; total run 32.484 seconds).
+Audible tone, amplifier silence, and pause/recovery observations have not yet
+been confirmed by the owner. Network integration and S3 validation remain pending.
