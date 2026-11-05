@@ -1,5 +1,41 @@
 # Playback validation
 
+## S3 N8R8 speaker-only branch
+
+Branch: `mohamed/feature/160-s3-audio-playback`, based on playback commit `83eee37`.
+This branch adds only S3 speaker test configuration. No microphone implementation,
+capture task, PTT button, or loopback application is included.
+
+Use the board's native USB connector (often labelled USB/OTG), not its UART bridge.
+S3 settings: 8 MB quad flash, dual core, native USB Serial/JTAG console. The module's
+8 MB octal PSRAM is intentionally unused; speaker playback fits in internal RAM.
+The existing target macros select I2S1 and S3 GPIOs; playback uses core 1 on dual-core
+S3. C3 uses I2S0 and core 0. Separate binaries are required; COM numbers do not select
+the chip. The uploader must target the environment matching the connected board.
+
+For S3, wire MAX98357A BCLK=GPIO12, LRC/WS=GPIO13, DIN=GPIO14, SD_MODE=GPIO11.
+Use common ground and your established compatible amplifier supply/speaker wiring.
+Disconnect power before rewiring; SD_MODE must not also be tied directly to a supply.
+Confirm GPIO11 is exposed on the carrier (it is not routed on Adam's project PCB yet).
+
+```powershell
+cd C:\Users\moham\Documents\ChatGPT\Oratio\oratio-playback-s3\fw
+$pio = 'C:\Users\moham\.platformio\penv\Scripts\pio.exe'
+& $pio device list
+$boardPort = 'COM12' # Replace with the actual USB device port, not Bluetooth.
+& $pio test -e audio_test_s3 --upload-port $boardPort --test-port $boardPort
+```
+
+Expect three Unity cases and the same audible tone/silence/pause/recovery sequence
+described below. Startup identifies `esp32s3`, I2S1 and two configured cores.
+If logs are missed, press RESET once while the test runner is waiting.
+Compile only: `pio test -e audio_test_s3 --without-uploading --without-testing`.
+For C3, use the existing `audio_test` environment and C3 wiring below.
+The base `esp32-s3-n8r8` environment runs the normal blink scaffold, not audio tests.
+S3 on-device execution and listening checks remain pending owner validation.
+
+## Existing C3 validation and driver contract
+
 Tracking: [driver #6](https://github.com/oratio-capstone/oratio/issues/6),
 [driver tests #7](https://github.com/oratio-capstone/oratio/issues/7),
 [task #8](https://github.com/oratio-capstone/oratio/issues/8),
