@@ -167,6 +167,15 @@ function scheduleRender() {
   }
 }
 
+// Signal strength (RSSI to the node's parent) -> label and colour class.
+function linkQuality(dbm) {
+  if (dbm === null || dbm === undefined) return { text: "–", cls: "" };
+  if (dbm >= -50) return { text: `${dbm} · excellent`, cls: "link-good" };
+  if (dbm >= -67) return { text: `${dbm} · good`, cls: "link-good" };
+  if (dbm >= -80) return { text: `${dbm} · weak`, cls: "link-weak" };
+  return { text: `${dbm} · poor`, cls: "link-poor" };
+}
+
 function ago(ts) {
   const s = Math.max(0, Date.now() / 1000 - ts);
   return s < 60 ? `${s.toFixed(0)} s ago` : `${(s / 60).toFixed(0)} min ago`;
@@ -200,11 +209,14 @@ function render() {
     sorted.forEach((n, index) => {
       const { tr, cells, button } = rowFor(n.node_id);
       const pos = n.pos ? `${n.pos[0].toFixed(1)}, ${n.pos[1].toFixed(1)}` : "–";
-      const values = [n.node_id, n.status, n.link ?? "–", pos, ago(n.last_seen)];
+      const link = linkQuality(n.link);
+      const values = [n.node_id, n.status, link.text, pos, ago(n.last_seen)];
       values.forEach((value, i) => {
         if (cells[i].textContent !== String(value)) cells[i].textContent = value;
       });
       cells[1].className = `status-${n.status}`;
+      // A dropped node's last reading is stale, so it is shown greyed out.
+      cells[2].className = n.status === "dropped" ? "muted" : link.cls;
       const stream = listening.get(n.node_id);
       const label = stream ? `Stop (${seconds(stream)} s)` : "Listen";
       if (button.textContent !== label) button.textContent = label;
