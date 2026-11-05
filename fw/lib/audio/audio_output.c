@@ -2,7 +2,9 @@
 #include "audio_common.h"
 
 #include "driver/i2s_std.h"
+#include "esp_log.h"
 
+static const char *TAG = "AUDIO_OUTPUT";
 static i2s_chan_handle_t s_tx;
 static bool s_running;
 
@@ -66,6 +68,10 @@ esp_err_t audio_output_open(void)
     {
         // Retain the handle if cleanup fails so close can be retried.
         (void)audio_output_close();
+    }
+    else
+    {
+        ESP_LOGI(TAG, "Mono speaker ready at %u Hz", (unsigned int)AUDIO_SAMPLE_RATE_HZ);
     }
     return result;
 }

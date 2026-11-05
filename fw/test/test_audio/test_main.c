@@ -1,11 +1,19 @@
 #include "audio_common.h"
 #include "audio_output.h"
 #include "playback.h"
+#include "esp_log.h"
 #include "freertos/task.h"
 #include "unity.h"
 
-void setUp(void) {}
-void tearDown(void) {}
+static const char *TAG = "AUDIO_TEST";
+
+void setUp(void)
+{
+}
+
+void tearDown(void)
+{
+}
 
 static void test_output_contract(void)
 {
@@ -46,7 +54,8 @@ static void test_buffered_playback(void)
 {
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, playback_task_start(NULL));
     // The consumer lives until reboot, so this buffer must also live until reboot.
-    MessageBufferHandle_t input = xMessageBufferCreate(4 * (sizeof(audio_frame_t) + sizeof(size_t)) + 1);
+    MessageBufferHandle_t input =
+        xMessageBufferCreate(4 * (sizeof(audio_frame_t) + sizeof(configMESSAGE_BUFFER_LENGTH_TYPE)));
     TEST_ASSERT_NOT_NULL(input);
     TEST_ASSERT_EQUAL(ESP_OK, audio_output_open());
     TEST_ASSERT_EQUAL(ESP_OK, playback_task_start(input));
@@ -86,6 +95,7 @@ static void test_buffered_playback(void)
 void app_main(void)
 {
     vTaskDelay(pdMS_TO_TICKS(2000));
+    ESP_LOGI(TAG, "Listen for direct tone, amp shutdown, buffered tone, pause and recovery");
     UNITY_BEGIN();
     RUN_TEST(test_output_contract);
     RUN_TEST(test_direct_tone);
