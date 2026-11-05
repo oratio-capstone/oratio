@@ -2,7 +2,8 @@
 
 Each node has its own UDP socket (so its own source port, like a real node) and sends:
   - a heartbeat every second with a drifting RSSI and position
-  - if it is a talker, a 20 ms audio frame every 20 ms (a sine tone, a different pitch per node)
+  - if it is a talker, a 20 ms audio frame every 20 ms: a speech-like signal (bursts like
+    syllables with short pauses), a different pitch per node
 Optional events: a node going silent (dropped) or sending an SOS at a given time.
 
 Examples:
@@ -42,6 +43,9 @@ class SimNode:
         self.x, self.y = rng.uniform(0, 20), rng.uniform(0, 20)
         self.tone_hz = 220 + 55 * node_id
         self.phase = 0.0
+        self.env = 0.0          # current loudness, 0..1
+        self.target = 0.0       # loudness the envelope is moving towards
+        self.burst_left = 0     # frames left in the current syllable or pause
         self.silent = False
         self.transport: asyncio.DatagramTransport | None = None
         self.sent = 0
@@ -65,10 +69,21 @@ class SimNode:
             await asyncio.sleep(interval)
 
     def _audio_frame(self) -> bytes:
+        """20 ms of a speech-like test signal: a voiced tone with harmonics whose loudness
+        follows random 'syllables' (0.1-0.35 s) separated by short pauses."""
+        if self.burst_left <= 0:
+            speaking = self.rng.random() < 0.75
+            self.burst_left = self.rng.randint(5, 18) if speaking else self.rng.randint(2, 10)  # in frames
+            self.target = self.rng.uniform(0.35, 1.0) if speaking else 0.0
+        self.burst_left -= 1
+        loudness = self.target * self.rng.uniform(0.45, 1.0)  # frame-to-frame variation, like real speech
         step = 2 * math.pi * self.tone_hz / protocol.SAMPLE_RATE
         samples = []
         for _ in range(SAMPLES_PER_FRAME):
-            samples.append(int(8000 * math.sin(self.phase)))
+            self.env += (loudness - self.env) * 0.004  # smooth attack and decay (~15 ms)
+            voice = 0.6 * math.sin(self.phase) + 0.3 * math.sin(2 * self.phase) + 0.1 * math.sin(3 * self.phase)
+            noise = self.rng.uniform(-0.08, 0.08)
+            samples.append(int(max(-1.0, min(1.0, self.env * (voice + noise))) * 12000))
             self.phase = (self.phase + step) % (2 * math.pi)
         return struct.pack(f"<{SAMPLES_PER_FRAME}h", *samples)  # 16-bit little-endian PCM
 
