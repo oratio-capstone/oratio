@@ -9,7 +9,11 @@
 #include "freertos/task.h"
 
 // Push-to-talk button: one leg to this GPIO, the other to GND. Internal pull-up, so pressed reads 0.
+#if CONFIG_IDF_TARGET_ESP32S3
+#define AUDIO_CAPTURE_PTT_GPIO GPIO_NUM_21 // PCB pin map
+#else
 #define AUDIO_CAPTURE_PTT_GPIO GPIO_NUM_10
+#endif
 
 static const char *TAG = "AUDIO_CAPTURE";
 

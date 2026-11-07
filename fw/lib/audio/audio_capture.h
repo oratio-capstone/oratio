@@ -16,10 +16,10 @@
 #define AUDIO_CAPTURE_WS_GPIO GPIO_NUM_5
 #define AUDIO_CAPTURE_SD_GPIO GPIO_NUM_6
 #elif CONFIG_IDF_TARGET_ESP32S3
-#define AUDIO_CAPTURE_I2S_PORT I2S_NUM_0  // speaker uses I2S_NUM_1
-#define AUDIO_CAPTURE_SCK_GPIO GPIO_NUM_4 // TODO: confirm against PCB
-#define AUDIO_CAPTURE_WS_GPIO GPIO_NUM_5
-#define AUDIO_CAPTURE_SD_GPIO GPIO_NUM_6
+#define AUDIO_CAPTURE_I2S_PORT I2S_NUM_0   // speaker uses I2S_NUM_1
+#define AUDIO_CAPTURE_SCK_GPIO GPIO_NUM_39 // PCB pin map (left side)
+#define AUDIO_CAPTURE_WS_GPIO GPIO_NUM_40
+#define AUDIO_CAPTURE_SD_GPIO GPIO_NUM_41
 #else
 #error "audio_capture: unsupported target"
 #endif
