@@ -13,10 +13,10 @@ The existing target macros select I2S1 and S3 GPIOs; playback uses core 1 on dua
 S3. C3 uses I2S0 and core 0. Separate binaries are required; COM numbers do not select
 the chip. The uploader must target the environment matching the connected board.
 
-For S3, wire MAX98357A BCLK=GPIO12, LRC/WS=GPIO13, DIN=GPIO14, SD_MODE=GPIO11.
+For S3, wire MAX98357A BCLK=GPIO42, LRC/WS=GPIO2, DIN=GPIO1, SD_MODE=GPIO47.
 Use common ground and your established compatible amplifier supply/speaker wiring.
 Disconnect power before rewiring; SD_MODE must not also be tied directly to a supply.
-Confirm GPIO11 is exposed on the carrier (it is not routed on Adam's project PCB yet).
+These are Adam's proposed PCB pins; hardware validation is still pending.
 
 ```powershell
 cd C:\Users\moham\Documents\ChatGPT\Oratio\oratio-playback-s3\fw
@@ -33,6 +33,21 @@ Compile only: `pio test -e audio_test_s3 --without-uploading --without-testing`.
 For C3, use the existing `audio_test` environment and C3 wiring below.
 The base `esp32-s3-n8r8` environment runs the normal blink scaffold, not audio tests.
 S3 on-device execution and listening checks remain pending owner validation.
+
+### Hardware gain comparison (pending validation)
+
+Check that the breakout does not already strap GAIN to another connection.
+With power disconnected, leave GAIN floating, then power up and run the test above.
+Listen for the tone, amplifier shutdown, buffered playback pause and recovery.
+Power off, connect GAIN directly to GND, then repeat with the same firmware,
+speaker and supply. Do not ground SD_MODE: that shuts the amplifier down.
+
+For MAX98357A I2S operation, floating GAIN selects 9 dB; GAIN directly to GND
+selects 12 dB. Expect a modest volume increase (+3 dB) if GAIN was floating,
+not twice the perceived loudness. Record any distortion or increased noise.
+The test-tone amplitude is unchanged so the comparison is meaningful; this quiet
+tone does not establish maximum clean speech volume. Report pin operation and
+gain listening results separately from the automated Unity assertions.
 
 ## Existing C3 validation and driver contract
 
