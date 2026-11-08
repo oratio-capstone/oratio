@@ -19,6 +19,7 @@ import concurrent.futures
 import json
 import logging
 import sqlite3
+import statistics
 import time
 from pathlib import Path
 from typing import Any
@@ -156,7 +157,7 @@ class EventLog:
             "sos": counts.get("sos", 0),
             "sos_open": open_sos,
             "ack_avg_s": sum(ack_times) / len(ack_times) if ack_times else None,
-            "ack_median_s": ack_times[len(ack_times) // 2] if ack_times else None,
+            "ack_median_s": statistics.median(ack_times) if ack_times else None,  # middle two averaged when even
             "ack_max_s": ack_times[-1] if ack_times else None,
         }
 

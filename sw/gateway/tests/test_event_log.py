@@ -136,3 +136,13 @@ def test_relay_is_logged_as_a_relay_when_it_connects():
     ws.apply_event(messages.heartbeat(101))
     seen = [e for e in result(ws.events.query(kinds=["node_seen"]))]
     assert [e["message"] for e in seen] == ["Relay 101 connected"]
+
+
+def test_median_averages_the_middle_two_when_the_count_is_even():
+    log = EventLog(None)
+    for delay in (5, 10, 20, 30):
+        e = log.add("sos", node_id=1, message="SOS", ts=1000.0, acked=False)
+        log.update(e["id"], {"acked": True, "acked_ts": 1000.0 + delay})
+    stats = result(log.stats())
+    assert stats["ack_median_s"] == 15  # (10 + 20) / 2
+    assert stats["ack_avg_s"] == 16.25 and stats["ack_max_s"] == 30
