@@ -157,3 +157,26 @@ button.rename:hover { color: var(--accent); }
 .log-table .acked { color: var(--ok); }
 .log-table .not-acked { color: var(--bad); font-weight: 600; }
 .log-foot { display: flex; align-items: center; gap: 12px; margin-top: 10px; font-size: 14px; }
+
+/* Who can be heard */
+.status-talking { color: var(--ok); font-weight: 600; }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+button:disabled:hover { border-color: var(--line); }
+.emergency-btn { margin-left: 6px; font-size: 13px; color: var(--bad); border-color: transparent; background: none; }
+.emergency-btn:hover { border-color: var(--bad); }
+.wave-card.emergency { border-color: var(--bad); }
+.tag-emergency { font-size: 12px; font-weight: 600; color: var(--bad); border: 1px solid var(--bad);
+                 border-radius: 999px; padding: 0 8px; }
+.t-node.talking .t-worker { stroke: var(--ok); stroke-width: 3; }
+.kind-emergency_listen { color: var(--bad); border-color: var(--bad); }
+#emergency-dialog { max-width: 420px; border: 1px solid var(--line); border-radius: 12px; padding: 20px 22px;
+                    background: var(--bg); color: var(--fg); }
+#emergency-dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
+#emergency-dialog h2 { margin: 0 0 8px; font-size: 18px; }
+#emergency-dialog p { margin: 6px 0; color: var(--muted); }
+.dialog-buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.dialog-buttons button { padding: 6px 14px; }
+button.danger { background: #cf222e; border-color: #cf222e; color: #fff; font-weight: 600; }
+button.danger:hover { background: #a40e26; border-color: #a40e26; }
+#toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); max-width: min(560px, calc(100% - 32px));
+         background: var(--fg); color: var(--bg); padding: 10px 16px; border-radius: 8px; font-size: 14px; z-index: 20; }

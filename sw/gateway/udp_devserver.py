@@ -37,6 +37,8 @@ class UdpDevServer:
         self.dropped: set[int] = set()
         self.listening: set[int] = set()
         self.malformed = 0
+        self.transport: asyncio.DatagramTransport | None = None
+        self.emergency: set[int] = set()  # nodes whose wearer must be shown an emergency listen
 
     def handle(self, data: bytes, addr: tuple[str, int]) -> None:
         packet = protocol.parse(data)
@@ -63,12 +65,18 @@ class UdpDevServer:
             messages.put_nowait_drop_oldest(self.q_in, event)
         elif packet.type == protocol.TYPE_SOS:
             messages.put_nowait_drop_oldest(self.q_in, messages.sos(node_id, now))
+        elif packet.type == protocol.TYPE_TALK:
+            pressed = protocol.parse_talk(packet.payload)
+            if pressed is not None:
+                messages.put_nowait_drop_oldest(self.q_in, messages.talk(node_id, pressed, now))
         elif packet.type == protocol.TYPE_AUDIO and node_id in self.listening:
             messages.put_nowait_drop_oldest(self.q_in, messages.audio(node_id, packet.payload))
 
     async def check_liveness(self) -> None:
         while True:
             await asyncio.sleep(1.0)
+            for node_id in self.listening | self.emergency:  # resend while set: a lost packet heals
+                self.send_control(node_id)
             now = time.time()
             for node_id, seen in list(self.last_seen.items()):
                 if node_id not in self.dropped and now - seen > self.timeout:
@@ -78,10 +86,26 @@ class UdpDevServer:
     async def read_commands(self) -> None:
         while True:
             cmd = await self.q_out.get()
+            node_id = cmd.get("node_id")
             if cmd.get("type") == "listen":
-                self.listening.add(cmd["node_id"])
+                self.listening.add(node_id)
             elif cmd.get("type") == "stop":
-                self.listening.discard(cmd["node_id"])
+                self.listening.discard(node_id)
+            elif cmd.get("type") == "notify":
+                (self.emergency.add if cmd["what"] == "emergency_listen_on" else self.emergency.discard)(node_id)
+            self.send_control(node_id)
+
+    def control_flags(self, node_id: int) -> int:
+        flags = protocol.CONTROL_STREAM if node_id in self.listening else 0
+        return flags | (protocol.CONTROL_EMERGENCY if node_id in self.emergency else 0)
+
+    def send_control(self, node_id: int) -> None:
+        """Tell a device whether to stream its microphone and whether to show an emergency listen."""
+        addr = self.addresses.get(node_id)
+        if addr is None or self.transport is None:
+            return
+        flags = self.control_flags(node_id)
+        self.transport.sendto(protocol.build(protocol.TYPE_CONTROL, node_id, bytes([flags])), addr)
 
 
 async def start(q_in: asyncio.Queue, q_out: asyncio.Queue, host: str, port: int,
@@ -89,6 +113,7 @@ async def start(q_in: asyncio.Queue, q_out: asyncio.Queue, host: str, port: int,
     server = UdpDevServer(q_in, q_out, timeout)
     loop = asyncio.get_running_loop()
     transport, _ = await loop.create_datagram_endpoint(lambda: _Protocol(server), local_addr=(host, port))
+    server.transport = transport
     server.port = transport.get_extra_info("sockname")[1]  # the real port, useful when port=0
     server._tasks = [asyncio.create_task(server.check_liveness()),
                      asyncio.create_task(server.read_commands())]

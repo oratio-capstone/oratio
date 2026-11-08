@@ -17,6 +17,7 @@ async def gateway():
     port = server.sockets[0].getsockname()[1]
     yield ws, q_in, q_out, f"ws://127.0.0.1:{port}/ws"
     ws._consumer.cancel()
+    ws._talk_task.cancel()
     server.close()
     await server.wait_closed()
 
@@ -78,12 +79,16 @@ async def test_listen_reaches_udp_side_and_audio_comes_back(gateway):
     _, q_in, q_out, url = gateway
     async with connect(url) as client:
         await recv_json(client)
+        await q_in.put(messages.talk(5, True))  # the worker holds the talk button
+        await asyncio.sleep(0.05)
         await client.send(json.dumps({"type": "listen", "node_id": 5}))
         assert await asyncio.wait_for(q_out.get(), 2) == messages.listen(5)
 
         pcm = bytes(640)
         await q_in.put(messages.audio(5, pcm))
         frame = await asyncio.wait_for(client.recv(), 2)
+        while isinstance(frame, str):  # status updates may arrive first
+            frame = await asyncio.wait_for(client.recv(), 2)
         assert frame[:2] == (5).to_bytes(2, "big") and frame[2:] == pcm
 
         await client.send(json.dumps({"type": "stop", "node_id": 5}))
@@ -92,9 +97,11 @@ async def test_listen_reaches_udp_side_and_audio_comes_back(gateway):
 
 @pytest.mark.asyncio
 async def test_closing_the_tab_stops_listening(gateway):
-    _, _, q_out, url = gateway
+    _, q_in, q_out, url = gateway
     async with connect(url) as client:
         await recv_json(client)
+        await q_in.put(messages.talk(6, True))  # the worker holds the talk button
+        await asyncio.sleep(0.05)
         await client.send(json.dumps({"type": "listen", "node_id": 6}))
         await asyncio.wait_for(q_out.get(), 2)
     assert await asyncio.wait_for(q_out.get(), 2) == messages.stop(6)
@@ -102,10 +109,12 @@ async def test_closing_the_tab_stops_listening(gateway):
 
 @pytest.mark.asyncio
 async def test_two_dashboards_share_one_listen(gateway):
-    _, _, q_out, url = gateway
+    _, q_in, q_out, url = gateway
     async with connect(url) as a, connect(url) as b:
         await recv_json(a)
         await recv_json(b)
+        await q_in.put(messages.talk(7, True))  # the worker holds the talk button
+        await asyncio.sleep(0.05)
         await a.send(json.dumps({"type": "listen", "node_id": 7}))
         await b.send(json.dumps({"type": "listen", "node_id": 7}))
         assert await asyncio.wait_for(q_out.get(), 2) == messages.listen(7)

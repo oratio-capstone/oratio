@@ -84,6 +84,15 @@ The dashboard has two tabs. **Live** lists people (with the relay they're near),
 connects to and how many people it carries) and alerts. **Topology** draws the mesh as a tree from
 the Pi down; click a person to listen. The SOS banner and the Listening panel show on both tabs.
 
+**Who can be heard.** Nobody is listened to by default. A coordinator can press **Listen** only
+while that worker holds their talk button or has an open SOS; the gateway enforces this, not just the
+page. A stream that started while someone talked pauses when they release the button and picks up the
+next time they press it. Anyone else needs **Emergency…**, a confirmed emergency listen: it's recorded
+in the Log tab (when, which dashboard, how long) and the worker's device is told so it can show them
+(LED / beep). During an SOS or an emergency listen the gateway asks the device to stream its
+microphone even though the talk button isn't pressed. In the simulator, workers 1..K (`--talkers`)
+use the talk button in bursts like a radio.
+
 The **Log** tab shows the saved history (SOS, connections lost and back, relay failures, renames,
 gateway restarts) with filters by person, type and period, summary numbers (SOS count, time to
 acknowledge, connections lost, relay failures) and **Export CSV** for spreadsheets and reports. Events

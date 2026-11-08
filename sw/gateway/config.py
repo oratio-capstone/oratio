@@ -20,6 +20,11 @@ HEARTBEAT_TIMEOUT_S = float(_get("HEARTBEAT_TIMEOUT_S", "3.0"))
 # Bounded queues between the two halves; the oldest audio is dropped when full.
 QUEUE_SIZE = int(_get("QUEUE_SIZE", "200"))
 
+# Talk button: no 'pressed' packet for this long counts as released; listens that relied on
+# talking end this long after the release.
+TALK_TIMEOUT_S = float(_get("TALK_TIMEOUT_S", "3.0"))
+TALK_GRACE_S = float(_get("TALK_GRACE_S", "2.0"))
+
 # Per-browser send buffer; a client this far behind is disconnected.
 CLIENT_BUFFER = int(_get("CLIENT_BUFFER", "128"))
 

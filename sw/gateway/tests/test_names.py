@@ -18,6 +18,7 @@ async def start(names_file):
 
 async def stop(ws, server):
     ws._consumer.cancel()
+    ws._talk_task.cancel()
     server.close()
     await server.wait_closed()
 

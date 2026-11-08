@@ -98,6 +98,7 @@
             <option value="sos">SOS</option>
             <option value="lost">Connection lost</option>
             <option value="back">Connected / back</option>
+            <option value="emergency">Emergency listens</option>
             <option value="renamed">Renamed</option>
             <option value="gateway">Gateway restarts</option>
           </select>
@@ -129,6 +130,18 @@
       <p class="log-foot"><span id="log-shown" class="muted"></span> <button id="log-more" hidden>Load older events</button></p>
     </section>
   </div>
+
+  <dialog id="emergency-dialog" aria-labelledby="em-title">
+    <h2 id="em-title">Emergency listen to <span id="em-name"></span>?</h2>
+    <p>Use this only if they may be in danger and can't call for help themselves.</p>
+    <p>It is recorded in the log, and their device shows that you are listening.</p>
+    <div class="dialog-buttons">
+      <button id="em-cancel" type="button">Cancel</button>
+      <button id="em-confirm" type="button" class="danger">Listen now</button>
+    </div>
+  </dialog>
+
+  <div id="toast" role="status" aria-live="polite" hidden></div>
 
   <script src="app.js"></script>
 </body>

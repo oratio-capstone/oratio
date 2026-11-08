@@ -124,6 +124,7 @@ async def test_dashboard_can_query_the_log(tmp_path):
         assert replies[9]["type"] == "log_result"  # bad fields are ignored, not fatal
     finally:
         ws._consumer.cancel()
+        ws._talk_task.cancel()
         server.close()
         await server.wait_closed()
 

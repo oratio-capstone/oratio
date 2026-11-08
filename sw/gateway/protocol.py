@@ -36,6 +36,19 @@ HEADER_SIZE = HEADER.size  # 3 bytes
 TYPE_HEARTBEAT = b"H"
 TYPE_AUDIO = b"A"  # proposal
 TYPE_SOS = b"S"  # proposal
+TYPE_TALK = b"P"  # proposal: talk button, payload 1 byte (1 = pressed, 0 = released)
+TYPE_CONTROL = b"N"  # proposal, gateway -> node: payload 1 byte of flags, see CONTROL_* below
+
+# Talk button: the node sends 'P' 1 when pressed, repeats it about once a second while held
+# (so a lost packet doesn't matter), and 'P' 0 when released.
+#
+# Control (gateway -> node): a device sends microphone audio while its talk button is held,
+# OR while the gateway asks it to (CONTROL_STREAM): during an SOS or an emergency listen,
+# when the wearer may not be able to press anything. CONTROL_EMERGENCY means an emergency
+# listen is on: the device shows the wearer (LED / beep). The gateway resends the flags about
+# once a second while any is set, so the device can treat 3 s of silence as "all off".
+CONTROL_STREAM = 0x01
+CONTROL_EMERGENCY = 0x02
 
 HEARTBEAT = struct.Struct(">BBb6s6s")
 ROLE_WORKER = 0
@@ -65,6 +78,15 @@ def parse(data: bytes) -> Packet | None:
 def build(msg_type: bytes, node_id: int, payload: bytes = b"") -> bytes:
     """Encode a datagram. Used by the simulator and tests."""
     return HEADER.pack(msg_type, node_id) + payload
+
+
+def parse_talk(payload: bytes) -> bool | None:
+    """True = talk button pressed, False = released, None = malformed."""
+    return bool(payload[0]) if payload else None
+
+
+def build_talk(pressed: bool) -> bytes:
+    return bytes([1 if pressed else 0])
 
 
 class Heartbeat(NamedTuple):

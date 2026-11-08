@@ -12,12 +12,15 @@ Q in  (UDP -> WebSocket)
                                      (None = the heartbeat carried no telemetry; keep the last value)
     {"type": "node_dropped",         "node_id": int, "ts": float}
     {"type": "sos",                  "node_id": int, "ts": float}
+    {"type": "talk",                 "node_id": int, "pressed": bool, "ts": float}   talk button
     ("audio", node_id, pcm_bytes)    a tuple, kept light because it arrives 50 times a second per talker;
                                      only sent for nodes a dashboard is listening to
 
 Q out (WebSocket -> UDP)
     {"type": "listen", "node_id": int}   start sending this node's audio on Q in
     {"type": "stop",   "node_id": int}   stop sending it
+    {"type": "notify", "node_id": int, "what": "emergency_listen_on" | "emergency_listen_off"}
+                                         tell the device to show this to the wearer (LED / beep)
 """
 
 from __future__ import annotations
@@ -50,6 +53,14 @@ def node_dropped(node_id: int, ts: float | None = None) -> dict[str, Any]:
 
 def sos(node_id: int, ts: float | None = None) -> dict[str, Any]:
     return {"type": "sos", "node_id": node_id, "ts": ts or time.time()}
+
+
+def talk(node_id: int, pressed: bool, ts: float | None = None) -> dict[str, Any]:
+    return {"type": "talk", "node_id": node_id, "pressed": pressed, "ts": ts or time.time()}
+
+
+def notify(node_id: int, what: str) -> dict[str, Any]:
+    return {"type": "notify", "node_id": node_id, "what": what}
 
 
 def audio(node_id: int, pcm: bytes) -> tuple[str, int, bytes]:

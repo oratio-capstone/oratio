@@ -7,8 +7,11 @@ relay is clearly stronger, the way Mesh-Lite does. Signal strength falls with di
 
 Each node has its own UDP socket (so its own source port, like a real node) and sends:
   - a heartbeat every second: role, mesh level, RSSI to parent, parent MAC, own MAC
-  - if it is a talker, a 20 ms audio frame every 20 ms: a speech-like signal (bursts like
-    syllables with short pauses), a different pitch per node
+  - if it is a talker, push-to-talk like a radio: it holds the talk button for 4-10 s
+    (a 'P' packet each second), then releases it for 8-20 s
+  - microphone audio (20 ms frames, a speech-like signal, a different pitch per node) while
+    the talk button is held, or while the gateway asks for it (an SOS or an emergency
+    listen: the 'N' control packet); quiet background sound when the wearer isn't talking
 Optional events: a node going silent (dropped) or sending an SOS at a given time.
 When a relay goes silent, everything behind it goes quiet for --reroute seconds while
 the mesh finds new parents, then carries on through another relay.
@@ -50,8 +53,16 @@ def rssi_at(distance_m: float, rng: random.Random) -> float:
     return -40 - 22 * math.log10(max(distance_m, 1.0)) + rng.uniform(-3, 3)
 
 
-class _Ignore(asyncio.DatagramProtocol):
-    """Nodes don't need to read what the gateway forwards to them."""
+class _FromGateway(asyncio.DatagramProtocol):
+    """Reads the gateway's control packets; ignores anything else it forwards."""
+
+    def __init__(self, node: SimNode) -> None:
+        self.node = node
+
+    def datagram_received(self, data: bytes, addr) -> None:
+        packet = protocol.parse(data)
+        if packet and packet.type == protocol.TYPE_CONTROL and packet.payload:
+            self.node.on_control(packet.payload[0])
 
 
 class SimNode:
@@ -74,12 +85,28 @@ class SimNode:
         self.target = 0.0       # loudness the envelope is moving towards
         self.burst_left = 0     # frames left in the current syllable or pause
         self.silent = False
+        self.talking = False
+        self.control = 0               # last flags from the gateway
+        self.control_at = 0.0          # when they arrived; 3 s of silence = all off
         self.transport: asyncio.DatagramTransport | None = None
         self.sent = 0
 
     async def connect(self, host: str, port: int) -> None:
         loop = asyncio.get_running_loop()
-        self.transport, _ = await loop.create_datagram_endpoint(_Ignore, remote_addr=(host, port))
+        self.transport, _ = await loop.create_datagram_endpoint(lambda: _FromGateway(self),
+                                                                remote_addr=(host, port))
+
+    def on_control(self, flags: int) -> None:
+        was = self.control & protocol.CONTROL_EMERGENCY
+        self.control, self.control_at = flags, time.monotonic()
+        if (flags & protocol.CONTROL_EMERGENCY) != was:
+            state = "ON: device shows the wearer" if flags & protocol.CONTROL_EMERGENCY else "off"
+            print(f"node {self.node_id}: emergency listen {state}")
+
+    def streaming(self) -> bool:
+        """Send microphone audio now? While talking, or while the gateway asks (fresh flags)."""
+        asked = self.control & protocol.CONTROL_STREAM and time.monotonic() - self.control_at < 3.0
+        return self.talking or bool(asked)
 
     def send(self, msg_type: bytes, payload: bytes = b"") -> None:
         if self.silent or self.transport is None or time.monotonic() < self.offline_until:
@@ -108,6 +135,8 @@ class SimNode:
             self.target = self.rng.uniform(0.35, 1.0) if speaking else 0.0
         self.burst_left -= 1
         loudness = self.target * self.rng.uniform(0.45, 1.0)  # frame-to-frame variation, like real speech
+        if not self.talking:
+            loudness *= 0.15  # not speaking to anyone: breathing, footsteps, distant voices
         step = 2 * math.pi * self.tone_hz / protocol.SAMPLE_RATE
         samples = []
         for _ in range(SAMPLES_PER_FRAME):
@@ -118,12 +147,25 @@ class SimNode:
             self.phase = (self.phase + step) % (2 * math.pi)
         return struct.pack(f"<{SAMPLES_PER_FRAME}h", *samples)  # 16-bit little-endian PCM
 
+    async def talk(self) -> None:
+        """Talk in bursts with the talk button held, like a radio. Starts talking right away."""
+        while True:
+            self.talking = True
+            for _ in range(round(self.rng.uniform(4, 10))):
+                self.send(protocol.TYPE_TALK, protocol.build_talk(True))  # repeated: a lost packet doesn't matter
+                await asyncio.sleep(1.0)
+            self.talking = False
+            self.send(protocol.TYPE_TALK, protocol.build_talk(False))
+            await asyncio.sleep(self.rng.uniform(8, 20))
+
     async def audio(self) -> None:
+        """A 20 ms microphone frame every 20 ms whenever streaming() says so."""
         loop = asyncio.get_running_loop()
         frame_s = protocol.FRAME_MS / 1000
         next_at = loop.time()
         while True:
-            self.send(protocol.TYPE_AUDIO, self._audio_frame())
+            if self.streaming():
+                self.send(protocol.TYPE_AUDIO, self._audio_frame())
             next_at += frame_s  # schedule from a fixed clock so timing doesn't drift
             await asyncio.sleep(max(0.0, next_at - loop.time()))
 
@@ -216,7 +258,8 @@ async def run(args: argparse.Namespace) -> None:
 
     tunnel = Tunnel(relays, workers, args.reroute, rng)
     tasks = [asyncio.create_task(tunnel.run(args.heartbeat))]
-    tasks += [asyncio.create_task(n.audio()) for n in nodes if n.talker]
+    tasks += [asyncio.create_task(n.talk()) for n in nodes if n.talker]
+    tasks += [asyncio.create_task(n.audio()) for n in workers]  # every wearable has a microphone
 
     async def at(seconds: float, action, label: str) -> None:
         await asyncio.sleep(seconds)

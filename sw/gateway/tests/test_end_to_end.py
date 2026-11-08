@@ -32,7 +32,7 @@ async def test_simulated_nodes_show_up_and_drop():
     try:
         async with connect(f"ws://127.0.0.1:{ws_port}/ws") as client:
             await client.recv()  # snapshot
-            await client.send(json.dumps({"type": "listen", "node_id": 1}))
+            asked = False  # listen once node 1 is holding its talk button
             seen, statuses, alerts, audio_frames, latest = set(), {}, set(), 0, {}
             deadline = asyncio.get_running_loop().time() + 1.8
             while asyncio.get_running_loop().time() < deadline:
@@ -49,6 +49,9 @@ async def test_simulated_nodes_show_up_and_drop():
                     seen.add(data["node"]["node_id"])
                     statuses[data["node"]["node_id"]] = data["node"]["status"]
                     latest[data["node"]["node_id"]] = data["node"]
+                    if data["node"]["node_id"] == 1 and data["node"]["talking"] and not asked:
+                        await client.send(json.dumps({"type": "listen", "node_id": 1}))
+                        asked = True
                 elif data["type"] == "alert":
                     alerts.add((data["alert"]["kind"], data["alert"]["node_id"]))
         assert seen == {1, 2, 3, 101, 102}
@@ -65,5 +68,6 @@ async def test_simulated_nodes_show_up_and_drop():
         for task in udp._tasks:
             task.cancel()
         ws._consumer.cancel()
+        ws._talk_task.cancel()
         server.close()
         await server.wait_closed()

@@ -81,5 +81,6 @@ async def test_ack_from_one_dashboard_clears_it_on_the_other():
             assert (await recv_type(c, "snapshot"))["open_sos"] == []
     finally:
         ws._consumer.cancel()
+        ws._talk_task.cancel()
         server.close()
         await server.wait_closed()

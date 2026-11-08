@@ -27,7 +27,8 @@ async def main() -> None:
     ws = WebSocketServer(q_in, q_out, path=config.WS_PATH,
                          client_buffer=config.CLIENT_BUFFER, alert_history=config.ALERT_HISTORY,
                          names_file=config.NAMES_FILE,
-                         event_log=EventLog(config.EVENTS_DB, retention_days=config.EVENTS_RETENTION_DAYS))
+                         event_log=EventLog(config.EVENTS_DB, retention_days=config.EVENTS_RETENTION_DAYS),
+                         talk_timeout=config.TALK_TIMEOUT_S, talk_grace=config.TALK_GRACE_S)
     await ws.start(config.WS_HOST, config.WS_PORT)
     await udp_devserver.start(q_in, q_out, config.UDP_HOST, config.UDP_PORT,
                               timeout=config.HEARTBEAT_TIMEOUT_S)

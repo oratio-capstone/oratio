@@ -30,7 +30,9 @@ function connect() {
 
   socket.onopen = () => {
     setConn("live", "ok");
-    for (const id of listening.keys()) send({ type: "listen", node_id: id });  // resume after reconnect
+    for (const [id, stream] of listening) {  // resume after reconnect (the gateway re-checks permission)
+      if (!stream.paused) send({ type: "listen", node_id: id, emergency: stream.emergency });
+    }
   };
   socket.onclose = () => {
     setConn("reconnecting…", "bad");
@@ -51,6 +53,18 @@ function connect() {
       if (logLoaded) loadLog();  // reconnected: the gateway may have restarted
     } else if (msg.type === "node_update") {
       nodes.set(msg.node.node_id, msg.node);
+      const stream = listening.get(msg.node.node_id);
+      if (stream && stream.paused && msg.node.talking) {  // they pressed talk again: pick up
+        stream.paused = false;
+        send({ type: "listen", node_id: msg.node.node_id });
+      }
+    } else if (msg.type === "listen_denied") {
+      endStream(msg.node_id);
+      toast(msg.message);
+    } else if (msg.type === "listen_ended") {
+      const stream = listening.get(msg.node_id);
+      if (stream && msg.reason === "talk_released") stream.paused = true;  // wait for the next press
+      else { endStream(msg.node_id); toast(msg.message); }
     } else if (msg.type === "alert") {
       alerts.push(msg.alert);
       alerts = alerts.slice(-50);
@@ -99,30 +113,73 @@ function onAudio(buffer) {
   stream.lastFrameAt = performance.now();
 }
 
-function toggleListen(id) {
+// Listening is allowed while the worker holds the talk button or has an open SOS; the
+// gateway enforces this. Otherwise the only way in is a confirmed Emergency listen.
+function canListen(id) {
+  return Boolean(nodes.get(id)?.talking) || openSos.has(id);
+}
+
+function toggleListen(id, emergency = false) {
   if (listening.has(id)) {
-    listening.get(id).card.remove();
-    listening.delete(id);
+    endStream(id);
     send({ type: "stop", node_id: id });
+  } else if (!emergency && !canListen(id)) {
+    openEmergencyDialog(id);
+    return;
   } else {
-    listening.set(id, { frames: 0, levels: new Float32Array(WAVE_HISTORY), head: 0,
-                        lastFrameAt: 0, card: makeWaveCard(id) });
-    send({ type: "listen", node_id: id });
+    listening.set(id, { frames: 0, levels: new Float32Array(WAVE_HISTORY), head: 0, lastFrameAt: 0,
+                        emergency, paused: false, card: makeWaveCard(id, emergency) });
+    send({ type: "listen", node_id: id, emergency });
     requestAnimationFrame(drawWaves);
   }
   scheduleRender();
+}
+
+function endStream(id) {
+  const stream = listening.get(id);
+  if (!stream) return;
+  stream.card.remove();
+  listening.delete(id);
+  scheduleRender();
+}
+
+// ---- emergency listen ------------------------------------------------------------
+
+let emergencyId = null;
+
+function openEmergencyDialog(id) {
+  emergencyId = id;
+  $("em-name").textContent = displayName(id);
+  $("emergency-dialog").showModal();
+  $("em-cancel").focus();  // the safe choice is the default
+}
+
+$("em-cancel").addEventListener("click", () => $("emergency-dialog").close());
+$("em-confirm").addEventListener("click", () => {
+  $("emergency-dialog").close();
+  if (emergencyId !== null && !listening.has(emergencyId)) toggleListen(emergencyId, true);
+});
+
+let toastTimer = null;
+function toast(text) {
+  const el = $("toast");
+  el.textContent = text;
+  el.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.hidden = true; }, 5000);
 }
 
 function seconds(stream) {
   return (stream.frames * FRAME_SECONDS).toFixed(1);
 }
 
-function makeWaveCard(id) {
+function makeWaveCard(id, emergency) {
   const card = document.createElement("div");
-  card.className = "wave-card";
+  card.className = emergency ? "wave-card emergency" : "wave-card";
   card.innerHTML = `
     <div class="wave-head">
       <strong class="wave-name"></strong>
+      ${emergency ? '<span class="tag-emergency">Emergency listen</span>' : ""}
       <span class="wave-stat muted"></span>
       <button data-node="${id}">Stop</button>
     </div>
@@ -172,7 +229,8 @@ function drawWaves() {
     const nameEl = stream.card.querySelector(".wave-name");
     if (nameEl.textContent !== title) nameEl.textContent = title;
     stream.card.querySelector(".wave-stat").textContent =
-      silent && stream.frames ? `${seconds(stream)} s · no audio`
+      stream.paused ? `${seconds(stream)} s · waiting for ${title} to press talk`
+        : silent && stream.frames ? `${seconds(stream)} s · no audio`
         : silent ? "waiting for audio…" : `${seconds(stream)} s received`;
   }
   requestAnimationFrame(drawWaves);
@@ -252,7 +310,12 @@ function rowFor(table, id) {
     if (table === tables.people) {
       row.button = document.createElement("button");
       row.button.dataset.node = id;
-      cells[table.cols - 1].appendChild(row.button);
+      row.emergency = document.createElement("button");
+      row.emergency.className = "emergency-btn";
+      row.emergency.dataset.emergency = id;
+      row.emergency.textContent = "Emergency…";
+      row.emergency.title = "Listen without their request. Recorded in the log and shown on their device.";
+      cells[table.cols - 1].append(row.button, row.emergency);
     }
     table.rows.set(id, row);
     buildNameCell(row, id);
@@ -358,14 +421,19 @@ function render() {
     // A dropped node's last reading is stale, so it is shown greyed out.
     const stale = n.status === "dropped";
     const link = linkQuality(n.link);
-    setCell(row.cells[1], n.status, `status-${n.status}`);
+    const talking = n.talking && !stale;
+    setCell(row.cells[1], talking ? "talking" : n.status, talking ? "status-talking" : `status-${n.status}`);
     setCell(row.cells[2], n.near ? displayName(n.near) : n.parent === 0 ? "Pi" : "–", stale ? "muted" : "");
     setCell(row.cells[3], link.text, stale ? "muted" : link.cls);
     setCell(row.cells[4], ago(n.last_seen));
     const stream = listening.get(n.node_id);
+    const allowed = canListen(n.node_id);
     const label = stream ? `Stop (${seconds(stream)} s)` : "Listen";
     if (row.button.textContent !== label) row.button.textContent = label;
     row.button.classList.toggle("on", Boolean(stream));
+    row.button.disabled = !stream && !allowed;
+    row.button.title = stream || allowed ? "" : `Available while ${displayName(n.node_id)} holds talk or has an SOS`;
+    row.emergency.hidden = Boolean(stream) || allowed;
   });
 
   fillTable(tables.relays, relays, (n, row) => {
@@ -456,7 +524,7 @@ function shortName(text, max = 13) {
 
 function renderTopology() {
   const all = [...nodes.values()];
-  const key = JSON.stringify(all.map((n) => [n.node_id, n.parent, n.role, n.status, n.name,
+  const key = JSON.stringify(all.map((n) => [n.node_id, n.parent, n.role, n.status, n.name, n.talking,
     linkQuality(n.link).level, listening.has(n.node_id), openSos.has(n.node_id)]).sort());
   if (key === topoKey) return;
   topoKey = key;
@@ -527,21 +595,23 @@ function renderTopology() {
 
     const relay = isRelay(n);
     const sos = openSos.has(id);
+    const talking = n.talking && !stale;
     const classes = ["t-node", relay ? "relay" : "worker", stale && "dropped", sos && "sos",
-                     listening.has(id) && "listening"].filter(Boolean).join(" ");
+                     listening.has(id) && "listening", talking && "talking"].filter(Boolean).join(" ");
     const g = svgEl("g", { transform: `translate(${x},${y})`, class: classes }, marks);
     if (!relay) {
       g.dataset.node = id;
       g.setAttribute("tabindex", "0");
       g.setAttribute("role", "button");
-      g.setAttribute("aria-label", `${displayName(id)}: ${listening.has(id) ? "stop listening" : "listen"}`);
+      g.setAttribute("aria-label", `${displayName(id)}: ${listening.has(id) ? "stop listening"
+        : canListen(id) ? "listen" : "emergency listen"}`);
     }
     svgEl("rect", { x: -TOPO_COL / 2 + 2, y: -20, width: TOPO_COL - 4, height: 70, class: "t-hit" }, g);  // name is clickable too
     if (relay) svgEl("rect", { x: -14, y: -14, width: 28, height: 28, rx: 5, class: "t-relay" }, g);
     else svgEl("circle", { r: 14, class: "t-worker" }, g);
     svgEl("text", { y: 4, class: relay ? "t-id-inv" : "t-id" }, g).textContent = id;
     svgEl("text", { y: 31, class: "t-label" }, g).textContent = shortName(displayName(id));
-    const sub = sos ? "SOS" : stale ? "not responding" : listening.has(id) ? "listening" : "";
+    const sub = sos ? "SOS" : stale ? "not responding" : listening.has(id) ? "listening" : talking ? "talking" : "";
     if (sub) svgEl("text", { y: 45, class: `t-sub ${sos ? "t-sub-sos" : ""}` }, g).textContent = sub;
     const where = relay ? `connects to ${hopName(n.parent)}` : n.near ? `near ${displayName(n.near)}` : "";
     svgEl("title", {}, g).textContent =
@@ -635,6 +705,11 @@ for (const container of [$("people"), $("relays"), $("waves")]) {
       startRename(Number(rename.dataset.rename));
       return;
     }
+    const emergency = event.target.closest("button[data-emergency]");
+    if (emergency) {
+      openEmergencyDialog(Number(emergency.dataset.emergency));
+      return;
+    }
     const button = event.target.closest("button[data-node]");
     if (button) toggleListen(Number(button.dataset.node));
   });
@@ -649,10 +724,12 @@ const LOG_PAGE = 200;
 const KIND_LABELS = {
   sos: "SOS", node_dropped: "Not responding", relay_dropped: "Relay down", node_rejoined: "Back",
   node_seen: "Connected", renamed: "Renamed", gateway_started: "Gateway started",
+  emergency_listen: "Emergency listen", emergency_listen_ended: "Emergency ended",
 };
 const KIND_GROUPS = {
   sos: ["sos"], lost: ["node_dropped", "relay_dropped"], back: ["node_seen", "node_rejoined"],
   renamed: ["renamed"], gateway: ["gateway_started"],
+  emergency: ["emergency_listen", "emergency_listen_ended"],
 };
 let logEvents = [];
 let logMore = false;
