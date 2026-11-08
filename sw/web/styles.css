@@ -39,7 +39,9 @@ button.on { border-color: var(--accent); color: var(--accent); }
 .wave-head button { margin-left: auto; }
 .wave { display: block; width: 100%; height: 72px; }
 [hidden] { display: none !important; }
-#theme { margin-left: auto; font-size: 13px; }
+#sound { margin-left: auto; font-size: 13px; }
+#sound.locked { color: var(--warn); border-color: var(--warn); }
+#theme { font-size: 13px; }
 .link-good { color: var(--ok); }
 .link-weak { color: var(--warn); }
 .link-poor { color: var(--bad); font-weight: 600; }

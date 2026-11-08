@@ -3,7 +3,7 @@
 // shared by every dashboard.
 // Connects to ws://<same host>:8000/ws, shows nodes and alerts, reconnects automatically.
 // "Listen" streams a node's audio frames and draws them as a live waveform.
-// Sound playback isn't implemented yet.
+// Sound playback of node audio isn't implemented yet; an SOS sounds an alarm (see "SOS alarm sound").
 
 const WS_URL = `ws://${location.hostname || "localhost"}:8000/ws`;
 const FRAME_SECONDS = 0.02;    // each audio frame is 20 ms
@@ -356,6 +356,8 @@ function renderSos() {
     if (row.listen.textContent !== label) row.listen.textContent = label;
   }
   banner.hidden = open.length === 0;
+  if (open.length && !alarmTimer) startAlarm();
+  else if (!open.length && alarmTimer) stopAlarm();
   const title = open.length ? `(${open.length}) SOS · ${PAGE_TITLE}` : PAGE_TITLE;
   if (document.title !== title) document.title = title;  // visible even in another tab
 }
@@ -407,6 +409,89 @@ $("theme").addEventListener("click", () => {
   applyTheme(THEMES[(THEMES.indexOf(currentTheme()) + 1) % THEMES.length]);
 });
 applyTheme(currentTheme());
+
+// ---- SOS alarm sound ---------------------------------------------------------------
+// Beeps every few seconds while any SOS is unacknowledged. The tone is generated with
+// Web Audio, so there is no sound file to ship. Browsers only allow a page to make
+// sound after someone has clicked or typed on it, so until then the Sound button
+// says "click to enable"; any click on the page unlocks it. On/off is saved per device.
+
+const ALARM_EVERY_MS = 3000;
+let audioCtx = null;
+let alarmTimer = null;
+let lockedAtPress = false;     // was sound still blocked when the current click started?
+let soundOn = true;
+try { soundOn = localStorage.getItem("oratio-sound") !== "off"; } catch (e) { /* default: on */ }
+
+function audioReady() {
+  return audioCtx && audioCtx.state === "running";
+}
+
+function unlockAudio() {
+  if (!audioCtx) {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    audioCtx = new Ctx();
+    audioCtx.onstatechange = () => {
+      updateSoundButton();
+      if (audioReady() && alarmTimer) beep();  // SOS already open: sound it now, not on the next cycle
+    };
+  }
+  if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+  updateSoundButton();
+}
+
+function beep() {
+  if (!soundOn || !audioReady()) return;
+  const t0 = audioCtx.currentTime;
+  // Three short two-tone beeps (high-low-high), about 0.6 s in total.
+  [[0, 988], [0.2, 740], [0.4, 988]].forEach(([at, freq]) => {
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = "square";
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.0001, t0 + at);
+    gain.gain.exponentialRampToValueAtTime(0.15, t0 + at + 0.01);   // short fade in/out: no clicks
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + at + 0.16);
+    osc.connect(gain).connect(audioCtx.destination);
+    osc.start(t0 + at);
+    osc.stop(t0 + at + 0.17);
+  });
+}
+
+function startAlarm() {
+  beep();
+  alarmTimer = setInterval(beep, ALARM_EVERY_MS);
+}
+
+function stopAlarm() {
+  clearInterval(alarmTimer);
+  alarmTimer = null;
+}
+
+function updateSoundButton() {
+  const button = $("sound");
+  const locked = soundOn && !audioReady();
+  const label = !soundOn ? "Sound: off" : locked ? "Sound: click to enable" : "Sound: on";
+  if (button.textContent !== label) button.textContent = label;
+  button.classList.toggle("locked", locked);
+}
+
+$("sound").addEventListener("click", () => {
+  if (lockedAtPress) return;  // this click only unlocked sound; it shouldn't also turn it off
+  soundOn = !soundOn;
+  try { localStorage.setItem("oratio-sound", soundOn ? "on" : "off"); } catch (e) { /* this session only */ }
+  updateSoundButton();
+  if (soundOn) beep();  // let the user hear what the alarm sounds like
+});
+// Any click or key press anywhere on the page counts as permission to play sound.
+for (const type of ["pointerdown", "keydown"]) {
+  document.addEventListener(type, () => {
+    lockedAtPress = soundOn && !audioReady();
+    unlockAudio();
+  }, { capture: true });
+}
+updateSoundButton();
 
 setInterval(scheduleRender, 250);  // keep "last seen" and the seconds counters fresh
 connect();
