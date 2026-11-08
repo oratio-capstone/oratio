@@ -700,12 +700,12 @@ function onLogResult(msg) {
 function onLogStats(msg) {
   const st = msg.stats;
   $("st-sos").textContent = st.sos;
-  $("st-sos-note").textContent = !st.sos ? "none in this period"
-    : st.sos_open ? `${st.sos_open} not acknowledged` : "all acknowledged";
-  $("st-sos-note").classList.toggle("stat-bad", st.sos_open > 0);
+  // Only shown when it matters: an SOS nobody has acknowledged.
+  $("st-sos-note").hidden = !st.sos_open;
+  $("st-sos-note").textContent = `${st.sos_open} not acknowledged`;
   $("st-ack").textContent = st.ack_median_s === null ? "–" : duration(st.ack_median_s);
-  $("st-ack-note").textContent = st.ack_median_s === null ? "no acknowledged SOS yet"
-    : `average ${duration(st.ack_avg_s)} · slowest ${duration(st.ack_max_s)}`;
+  $("st-ack-tile").title = st.ack_median_s === null ? "No acknowledged SOS in this period"
+    : `Average ${duration(st.ack_avg_s)} · slowest ${duration(st.ack_max_s)}`;
   $("st-lost").textContent = st.counts.node_dropped || 0;
   $("st-relay").textContent = st.counts.relay_dropped || 0;
 }

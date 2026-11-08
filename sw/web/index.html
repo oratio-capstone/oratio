@@ -114,10 +114,10 @@
       </div>
 
       <div class="stats" id="log-stats" aria-live="polite">
-        <div class="stat"><div class="stat-label">SOS alerts</div><div class="stat-value" id="st-sos">–</div><div class="stat-note" id="st-sos-note"></div></div>
-        <div class="stat"><div class="stat-label">Median time to acknowledge</div><div class="stat-value" id="st-ack">–</div><div class="stat-note" id="st-ack-note"></div></div>
-        <div class="stat"><div class="stat-label">Connections lost</div><div class="stat-value" id="st-lost">–</div><div class="stat-note">times a person's device stopped responding</div></div>
-        <div class="stat"><div class="stat-label">Relay failures</div><div class="stat-value" id="st-relay">–</div><div class="stat-note">times a relay stopped responding</div></div>
+        <div class="stat"><div class="stat-label">SOS alerts</div><div class="stat-value" id="st-sos">–</div><div class="stat-note stat-bad" id="st-sos-note" hidden></div></div>
+        <div class="stat" id="st-ack-tile"><div class="stat-label">Median time to acknowledge</div><div class="stat-value" id="st-ack">–</div></div>
+        <div class="stat" title="Times a person's device stopped responding"><div class="stat-label">Connections lost</div><div class="stat-value" id="st-lost">–</div></div>
+        <div class="stat" title="Times a relay stopped responding"><div class="stat-label">Relay failures</div><div class="stat-value" id="st-relay">–</div></div>
       </div>
 
       <div class="table-wrap">
