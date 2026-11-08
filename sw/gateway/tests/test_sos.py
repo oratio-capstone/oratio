@@ -32,14 +32,14 @@ def test_sos_opens_once_and_repeats_bump_the_count():
     assert alert["count"] == 3 and alert["last_ts"] == 102.0 and alert["acked"] is False
 
 
-def test_acknowledge_closes_the_sos_and_logs_it():
+def test_acknowledge_closes_the_sos_in_place():
     ws = make_server()
     ws.apply_event(messages.sos(3))
     alert_id = ws.open_sos[3]["id"]
     ws.acknowledge(alert_id)
     assert ws.open_sos == {}
-    assert ws.alerts[0]["acked"] is True
-    assert ws.alerts[-1]["kind"] == "sos_acked"
+    assert ws.alerts[0]["acked"] is True and ws.alerts[0]["acked_ts"] >= ws.alerts[0]["ts"]
+    assert len(ws.alerts) == 1  # no second "acknowledged" entry
     # A new SOS after the acknowledgement is a fresh alert.
     ws.apply_event(messages.sos(3))
     assert ws.open_sos[3]["id"] != alert_id

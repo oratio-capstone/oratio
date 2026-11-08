@@ -313,8 +313,15 @@ function render() {
     const li = document.createElement("li");
     li.className = a.kind === "sos" ? "sos" : "";
     const repeats = a.count > 1 ? ` (sent ${a.count}×)` : "";
-    const state = a.kind === "sos" && a.acked ? " · acknowledged" : "";
-    li.textContent = `${new Date(a.ts * 1000).toLocaleTimeString()} — ${a.message}${repeats}${state}`;
+    li.textContent = `${new Date(a.ts * 1000).toLocaleTimeString()} — ${a.message}${repeats}`;
+    if (a.kind === "sos" && a.acked) {
+      const ack = document.createElement("span");
+      ack.className = "acked";
+      const after = a.acked_ts ? Math.max(0, a.acked_ts - a.ts) : null;
+      const delay = after === null ? "" : after < 60 ? ` after ${after.toFixed(0)} s` : ` after ${(after / 60).toFixed(0)} min`;
+      ack.textContent = ` · ✓ acknowledged${delay}`;
+      li.appendChild(ack);
+    }
     list.appendChild(li);
   }
 }

@@ -218,14 +218,14 @@ class WebSocketServer:
         return alert
 
     def acknowledge(self, alert_id: int) -> None:
-        """Close an open SOS for every dashboard and log who it was for."""
+        """Close an open SOS for every dashboard; the alert itself records when."""
         for node_id, alert in list(self.open_sos.items()):
             if alert["id"] == alert_id:
                 del self.open_sos[node_id]
                 alert["acked"] = True
+                alert["acked_ts"] = time.time()
+                log.info("SOS from %s acknowledged", self.label(node_id))
                 self._broadcast({"type": "sos_update", "alert": alert})
-                self._alert("sos_acked", node_id, time.time(),
-                            f"SOS from {self.label(node_id)} acknowledged")
                 return
 
     # ---- browsers ------------------------------------------------------------
