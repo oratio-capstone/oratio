@@ -13,6 +13,8 @@ const SILENCE_MS = 500;        // no frame for this long -> "no audio"
 const nodes = new Map();       // node_id -> node
 const listening = new Map();   // node_id -> { frames, levels: Float32Array, head, lastFrameAt, card }
 let alerts = [];
+const openSos = new Map();     // node_id -> unacknowledged SOS alert (shared by every dashboard)
+const PAGE_TITLE = document.title;
 let socket = null;
 
 const $ = (id) => document.getElementById(id);
@@ -42,11 +44,20 @@ function connect() {
       nodes.clear();
       for (const n of msg.nodes) nodes.set(n.node_id, n);
       alerts = msg.alerts;
+      openSos.clear();
+      for (const a of msg.open_sos || []) openSos.set(a.node_id, a);
     } else if (msg.type === "node_update") {
       nodes.set(msg.node.node_id, msg.node);
     } else if (msg.type === "alert") {
       alerts.push(msg.alert);
       alerts = alerts.slice(-50);
+      if (msg.alert.kind === "sos" && !msg.alert.acked) openSos.set(msg.alert.node_id, msg.alert);
+    } else if (msg.type === "sos_update") {
+      const a = msg.alert;
+      if (a.acked) openSos.delete(a.node_id);
+      else openSos.set(a.node_id, a);
+      const i = alerts.findIndex((x) => x.id === a.id);  // keep the history entry in step
+      if (i >= 0) alerts[i] = a;
     }
     scheduleRender();
   };
@@ -293,16 +304,72 @@ function render() {
     });
   }
 
+  renderSos();
+
   const list = $("alerts");
   list.replaceChildren();
   if (!alerts.length) list.innerHTML = '<li class="muted">No alerts</li>';
   for (const a of [...alerts].reverse()) {
     const li = document.createElement("li");
     li.className = a.kind === "sos" ? "sos" : "";
-    li.textContent = `${new Date(a.ts * 1000).toLocaleTimeString()} — ${a.message}`;
+    const repeats = a.count > 1 ? ` (sent ${a.count}×)` : "";
+    const state = a.kind === "sos" && a.acked ? " · acknowledged" : "";
+    li.textContent = `${new Date(a.ts * 1000).toLocaleTimeString()} — ${a.message}${repeats}${state}`;
     list.appendChild(li);
   }
 }
+
+// ---- SOS banner ------------------------------------------------------------------
+// Every unacknowledged SOS stays pinned under the header on every dashboard until
+// someone presses Acknowledge. Repeats from the same node only bump its count.
+
+const sosRows = new Map();     // node_id -> { el, text, listen }
+
+function renderSos() {
+  const banner = $("sos-banner");
+  for (const [id, row] of sosRows) {
+    if (!openSos.has(id)) { row.el.remove(); sosRows.delete(id); }
+  }
+  const open = [...openSos.values()].sort((a, b) => a.ts - b.ts);
+  for (const a of open) {
+    let row = sosRows.get(a.node_id);
+    if (!row) {
+      const el = document.createElement("div");
+      el.className = "sos-row";
+      const text = document.createElement("span");
+      text.className = "sos-text";
+      const listen = document.createElement("button");
+      listen.dataset.node = a.node_id;
+      const ack = document.createElement("button");
+      ack.className = "ack";
+      ack.textContent = "Acknowledge";
+      el.append(text, listen, ack);
+      row = { el, text, listen, ack };
+      sosRows.set(a.node_id, row);
+      banner.appendChild(el);
+    }
+    row.ack.dataset.ack = a.id;
+    const repeats = a.count > 1 ? ` · sent ${a.count}×` : "";
+    const text = `SOS — ${displayName(a.node_id)} · ${ago(a.ts)}${repeats}`;
+    if (row.text.textContent !== text) row.text.textContent = text;
+    const label = listening.has(a.node_id) ? "Stop" : "Listen";
+    if (row.listen.textContent !== label) row.listen.textContent = label;
+  }
+  banner.hidden = open.length === 0;
+  const title = open.length ? `(${open.length}) SOS · ${PAGE_TITLE}` : PAGE_TITLE;
+  if (document.title !== title) document.title = title;  // visible even in another tab
+}
+
+$("sos-banner").addEventListener("click", (event) => {
+  const ack = event.target.closest("button[data-ack]");
+  if (ack) {
+    send({ type: "ack", alert_id: Number(ack.dataset.ack) });
+    ack.disabled = true;  // the server's sos_update removes the row for everyone
+    return;
+  }
+  const button = event.target.closest("button[data-node]");
+  if (button) toggleListen(Number(button.dataset.node));
+});
 
 // One click handler each for the table and the waveform cards, so they survive updates.
 for (const container of [$("nodes"), $("waves")]) {

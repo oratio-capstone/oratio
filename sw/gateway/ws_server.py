@@ -5,13 +5,19 @@ to every connected browser. Commands from browsers ("listen" / "stop") go to
 the UDP side through Q out.
 
 Browser protocol (all text frames are JSON):
-    server -> browser   {"type": "snapshot", "nodes": [...], "alerts": [...]}   once, on connect
+    server -> browser   {"type": "snapshot", "nodes": [...], "alerts": [...], "open_sos": [...]}   on connect
                         {"type": "node_update", "node": {...}}
                         {"type": "alert", "alert": {...}}
+                        {"type": "sos_update", "alert": {...}}   an open SOS repeated or was acknowledged
                         binary: 2-byte node_id (big-endian) + 16-bit PCM, for nodes being listened to
     browser -> server   {"type": "listen", "node_id": 3}
                         {"type": "stop", "node_id": 3}   (or without node_id: stop everything)
                         {"type": "rename", "node_id": 3, "name": "Alex"}   ("" clears the name)
+                        {"type": "ack", "alert_id": 12}   acknowledge an SOS
+
+Every alert has an "id". An SOS stays open (shown as a banner on every dashboard)
+until one dashboard acknowledges it. A node that keeps sending SOS while its alert
+is open bumps "count" and "last_ts" on that alert instead of adding new ones.
 
 Node names (e.g. the person wearing the device) are shared by every dashboard and
 saved to a small JSON file, so they survive a gateway restart.
@@ -64,6 +70,10 @@ class WebSocketServer:
         self.client_buffer = client_buffer
         self.nodes: dict[int, dict[str, Any]] = {}
         self.alerts: collections.deque[dict[str, Any]] = collections.deque(maxlen=alert_history)
+        # Unacknowledged SOS alerts by node. Kept apart from the history so an SOS can
+        # never scroll out of view before someone has seen it.
+        self.open_sos: dict[int, dict[str, Any]] = {}
+        self._next_alert_id = 1
         self._clients: set[_Client] = set()
         self._listeners: collections.Counter[int] = collections.Counter()
         self.names_file = Path(names_file) if names_file else None
@@ -92,7 +102,8 @@ class WebSocketServer:
     def snapshot(self) -> dict[str, Any]:
         return {"type": "snapshot",
                 "nodes": sorted(self.nodes.values(), key=lambda n: n["node_id"]),
-                "alerts": list(self.alerts)}
+                "alerts": list(self.alerts),
+                "open_sos": sorted(self.open_sos.values(), key=lambda a: a["ts"])}
 
     def apply_event(self, event: Any) -> None:
         if isinstance(event, tuple) and event[0] == messages.AUDIO:
@@ -126,7 +137,15 @@ class WebSocketServer:
                 self._alert("node_dropped", node_id, ts, f"{self.label(node_id)} stopped responding")
         elif kind == "sos":
             self._node(node_id, ts)
-            self._alert("sos", node_id, ts, f"SOS from {self.label(node_id)}")
+            open_alert = self.open_sos.get(node_id)
+            if open_alert:  # still waiting for someone to acknowledge: don't pile up alerts
+                open_alert["count"] += 1
+                open_alert["last_ts"] = ts
+                self._broadcast({"type": "sos_update", "alert": open_alert})
+            else:
+                alert = self._alert("sos", node_id, ts, f"SOS from {self.label(node_id)}",
+                                    acked=False, count=1, last_ts=ts)
+                self.open_sos[node_id] = alert
         else:
             log.debug("ignoring unknown event %r", event)
 
@@ -189,11 +208,25 @@ class WebSocketServer:
         except OSError as exc:
             log.warning("could not save node names to %s: %s", self.names_file, exc)
 
-    def _alert(self, kind: str, node_id: int, ts: float, message: str) -> None:
-        alert = {"kind": kind, "node_id": node_id, "ts": ts, "message": message}
+    def _alert(self, kind: str, node_id: int, ts: float, message: str, **extra: Any) -> dict[str, Any]:
+        alert = {"id": self._next_alert_id, "kind": kind, "node_id": node_id, "ts": ts,
+                 "message": message, **extra}
+        self._next_alert_id += 1
         self.alerts.append(alert)
         log.info(message)
         self._broadcast({"type": "alert", "alert": alert})
+        return alert
+
+    def acknowledge(self, alert_id: int) -> None:
+        """Close an open SOS for every dashboard and log who it was for."""
+        for node_id, alert in list(self.open_sos.items()):
+            if alert["id"] == alert_id:
+                del self.open_sos[node_id]
+                alert["acked"] = True
+                self._broadcast({"type": "sos_update", "alert": alert})
+                self._alert("sos_acked", node_id, time.time(),
+                            f"SOS from {self.label(node_id)} acknowledged")
+                return
 
     # ---- browsers ------------------------------------------------------------
 
@@ -255,6 +288,8 @@ class WebSocketServer:
                 await self._stop_listening(client, target)
         elif cmd.get("type") == "rename" and isinstance(node_id, int):
             await self.rename(node_id, cmd.get("name"))
+        elif cmd.get("type") == "ack" and isinstance(cmd.get("alert_id"), int):
+            self.acknowledge(cmd["alert_id"])
 
     async def _start_listening(self, client: _Client, node_id: int) -> None:
         if node_id in client.listening:
