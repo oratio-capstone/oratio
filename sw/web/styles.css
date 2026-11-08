@@ -19,6 +19,8 @@ body { margin: 0 auto; max-width: 960px; padding: 16px; background: var(--bg); c
 header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 header button { white-space: nowrap; }
 h1 { font-size: 22px; margin: 0; }
+h1.logo { line-height: 0; }
+h1.logo svg { display: block; height: 56px; width: auto; color: var(--fg); }
 h2 { font-size: 17px; margin: 24px 0 8px; }
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
