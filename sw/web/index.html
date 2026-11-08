@@ -27,6 +27,7 @@
   <nav class="tabs" role="tablist" aria-label="Views">
     <a href="#live" role="tab" id="tab-live" aria-controls="panel-live">Live</a>
     <a href="#topology" role="tab" id="tab-topology" aria-controls="panel-topology">Topology</a>
+    <a href="#log" role="tab" id="tab-log" aria-controls="panel-log">Log</a>
   </nav>
 
   <!-- Shown on every tab, so a stream started from Topology stays in view. -->
@@ -80,6 +81,52 @@
         <li><span class="swatch dashed"></span> Not responding</li>
       </ul>
       <p id="topo-unplaced" class="muted" hidden></p>
+    </section>
+  </div>
+
+  <div id="panel-log" role="tabpanel" aria-labelledby="tab-log" hidden>
+    <section>
+      <h2>Event log</h2>
+      <p class="muted topo-help">Everything the gateway has recorded, saved on the Pi so it survives restarts.</p>
+      <div class="log-filters">
+        <label>Who
+          <select id="log-node"><option value="">Everyone</option></select>
+        </label>
+        <label>Type
+          <select id="log-kind">
+            <option value="">All events</option>
+            <option value="sos">SOS</option>
+            <option value="lost">Connection lost</option>
+            <option value="back">Connected / back</option>
+            <option value="renamed">Renamed</option>
+            <option value="gateway">Gateway restarts</option>
+          </select>
+        </label>
+        <label>Period
+          <select id="log-range">
+            <option value="3600">Last hour</option>
+            <option value="86400" selected>Last 24 hours</option>
+            <option value="604800">Last 7 days</option>
+            <option value="">Everything</option>
+          </select>
+        </label>
+        <button id="log-export" title="Download the events matching these filters as a spreadsheet file">Export CSV</button>
+      </div>
+
+      <div class="stats" id="log-stats" aria-live="polite">
+        <div class="stat"><div class="stat-label">SOS alerts</div><div class="stat-value" id="st-sos">–</div><div class="stat-note" id="st-sos-note"></div></div>
+        <div class="stat"><div class="stat-label">Median time to acknowledge</div><div class="stat-value" id="st-ack">–</div><div class="stat-note" id="st-ack-note"></div></div>
+        <div class="stat"><div class="stat-label">Connections lost</div><div class="stat-value" id="st-lost">–</div><div class="stat-note">times a person's device stopped responding</div></div>
+        <div class="stat"><div class="stat-label">Relay failures</div><div class="stat-value" id="st-relay">–</div><div class="stat-note">times a relay stopped responding</div></div>
+      </div>
+
+      <div class="table-wrap">
+        <table class="log-table">
+          <thead><tr><th>Time</th><th>Type</th><th>Who</th><th>Details</th></tr></thead>
+          <tbody id="log-rows"><tr><td colspan="4" class="muted">Loading…</td></tr></tbody>
+        </table>
+      </div>
+      <p class="log-foot"><span id="log-shown" class="muted"></span> <button id="log-more" hidden>Load older events</button></p>
     </section>
   </div>
 

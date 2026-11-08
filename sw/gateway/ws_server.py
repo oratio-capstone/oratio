@@ -14,6 +14,16 @@ Browser protocol (all text frames are JSON):
                         {"type": "stop", "node_id": 3}   (or without node_id: stop everything)
                         {"type": "rename", "node_id": 3, "name": "Alex"}   ("" clears the name)
                         {"type": "ack", "alert_id": 12}   acknowledge an SOS
+                        {"type": "log_query", "req": 1, "node_id": 3, "kinds": ["sos"], "since": ts,
+                         "until": ts, "before_id": 120, "limit": 200}   (all fields optional)
+                        {"type": "log_stats", "req": 2, "node_id": 3, "since": ts, "until": ts}
+    server -> browser   {"type": "log_result", "req": 1, "events": [...], "more": bool}   newest first
+                        {"type": "log_stats", "req": 2, "stats": {...}}
+                        {"type": "log_event", "event": {...}}   every new log entry, alerts included
+
+Event log: every alert plus log-only events (node_seen, renamed, gateway_started) is
+saved by event_log.EventLog, so history, the recent alerts and any unacknowledged SOS
+survive a gateway restart.
 
 Every alert has an "id". An SOS stays open (shown as a banner on every dashboard)
 until one dashboard acknowledges it. A node that keeps sending SOS while its alert
@@ -44,6 +54,7 @@ from websockets.asyncio.server import Server, ServerConnection, serve
 from websockets.exceptions import ConnectionClosed
 
 import messages
+from event_log import ALERT_KINDS, EventLog
 
 log = logging.getLogger("ws")
 
@@ -71,7 +82,7 @@ GATEWAY = 0  # "parent" value for level-1 nodes: their parent is the Pi itself
 class WebSocketServer:
     def __init__(self, q_in: asyncio.Queue, q_out: asyncio.Queue, *, path: str = "/ws",
                  client_buffer: int = 128, alert_history: int = 50,
-                 names_file: str | Path | None = None) -> None:
+                 names_file: str | Path | None = None, event_log: EventLog | None = None) -> None:
         self.q_in = q_in
         self.q_out = q_out
         self.path = path
@@ -82,11 +93,13 @@ class WebSocketServer:
         # never scroll out of view before someone has seen it.
         self.open_sos: dict[int, dict[str, Any]] = {}
         self._by_mac: dict[str, int] = {}  # SoftAP MAC -> node_id, to resolve parents
+        self._seen: set[int] = set()       # nodes whose first heartbeat was logged this run
         # Recent paths to the Pi per node: [(since_ts, (parent, grandparent, ...)), ...].
         # A relay is only declared dead after the heartbeat timeout, and by then the mesh may
         # have rerouted its children, so the alert looks up who was behind it when last heard.
         self._paths: dict[int, list[tuple[float, tuple[int, ...]]]] = {}
-        self._next_alert_id = 1
+        self.events = event_log or EventLog(None)
+        self._restore_alerts()
         self._clients: set[_Client] = set()
         self._listeners: collections.Counter[int] = collections.Counter()
         self.names_file = Path(names_file) if names_file else None
@@ -97,6 +110,7 @@ class WebSocketServer:
     async def start(self, host: str, port: int) -> Server:
         """Start accepting connections and consuming Q in. Returns the listening server."""
         server = await serve(self._handle_connection, host, port)
+        self._log_only("gateway_started", None, time.time(), "Gateway started")
         self._consumer = asyncio.create_task(self._consume_events(), name="ws-consume-q-in")
         addrs = ", ".join(f"{s.getsockname()[0]}:{s.getsockname()[1]}" for s in server.sockets)
         log.info("WebSocket server listening on %s%s", addrs, self.path)
@@ -144,6 +158,9 @@ class WebSocketServer:
                 self._by_mac[node["mac"]] = node_id
             self._resolve_tree(node)
             self._record_path(node_id, ts)
+            if node_id not in self._seen:  # logged on the first heartbeat, once the role is known
+                self._seen.add(node_id)
+                self._log_only("node_seen", node_id, ts, f"{self.label(node_id)} connected")
             self._mark_active(node, ts)
         elif kind == "node_dropped":
             node = self.nodes.get(node_id)
@@ -160,6 +177,7 @@ class WebSocketServer:
             if open_alert:  # still waiting for someone to acknowledge: don't pile up alerts
                 open_alert["count"] += 1
                 open_alert["last_ts"] = ts
+                self.events.update(open_alert["id"], {"count": open_alert["count"], "last_ts": ts})
                 self._broadcast({"type": "sos_update", "alert": open_alert})
             else:
                 alert = self._alert("sos", node_id, ts, f"SOS from {self.label(node_id)}",
@@ -252,15 +270,17 @@ class WebSocketServer:
         name = clean_name(name)
         if self.names.get(node_id, "") == name:
             return
+        before = self.label(node_id)
         if name:
             self.names[node_id] = name
         else:
             self.names.pop(node_id, None)
-        log.info("node %d renamed to %r", node_id, name or None)
         node = self.nodes.get(node_id)
         if node is not None:
             node["name"] = name or None
             self._broadcast({"type": "node_update", "node": node})
+        self._log_only("renamed", node_id, time.time(),
+                       f"{before} renamed to {name}" if name else f"{before}: name cleared", name=name or None)
         await asyncio.to_thread(self._save_names, dict(self.names))  # file I/O off the event loop
 
     def _load_names(self) -> dict[int, str]:
@@ -286,13 +306,30 @@ class WebSocketServer:
             log.warning("could not save node names to %s: %s", self.names_file, exc)
 
     def _alert(self, kind: str, node_id: int, ts: float, message: str, **extra: Any) -> dict[str, Any]:
-        alert = {"id": self._next_alert_id, "kind": kind, "node_id": node_id, "ts": ts,
-                 "message": message, **extra}
-        self._next_alert_id += 1
+        """An alert: shown in the Live tab's list and saved in the event log."""
+        alert = self.events.add(kind, node_id=node_id, message=message, ts=ts, **extra)
         self.alerts.append(alert)
         log.info(message)
         self._broadcast({"type": "alert", "alert": alert})
+        self._broadcast({"type": "log_event", "event": alert})
         return alert
+
+    def _log_only(self, kind: str, node_id: int | None, ts: float, message: str, **extra: Any) -> None:
+        """Worth keeping in the history, but not an alert."""
+        event = self.events.add(kind, node_id=node_id, message=message, ts=ts, **extra)
+        log.info(message)
+        self._broadcast({"type": "log_event", "event": event})
+
+    def _restore_alerts(self, open_sos_hours: float = 12) -> None:
+        """After a restart: the recent alerts again, and every SOS nobody acknowledged."""
+        self.alerts.extend(self.events.recent(ALERT_KINDS, self.alerts.maxlen or 50))
+        by_id = {a["id"]: a for a in self.alerts}
+        since = time.time() - open_sos_hours * 3600
+        for event in self.events.recent(("sos",), 200, since=since):
+            if not event.get("acked"):
+                self.open_sos[event["node_id"]] = by_id.get(event["id"], event)
+        if self.open_sos:
+            log.warning("%d SOS still unacknowledged from before the restart", len(self.open_sos))
 
     def acknowledge(self, alert_id: int) -> None:
         """Close an open SOS for every dashboard; the alert itself records when."""
@@ -301,6 +338,7 @@ class WebSocketServer:
                 del self.open_sos[node_id]
                 alert["acked"] = True
                 alert["acked_ts"] = time.time()
+                self.events.update(alert_id, {"acked": True, "acked_ts": alert["acked_ts"]})
                 log.info("SOS from %s acknowledged", self.label(node_id))
                 self._broadcast({"type": "sos_update", "alert": alert})
                 return
@@ -367,6 +405,32 @@ class WebSocketServer:
             await self.rename(node_id, cmd.get("name"))
         elif cmd.get("type") == "ack" and isinstance(cmd.get("alert_id"), int):
             self.acknowledge(cmd["alert_id"])
+        elif cmd.get("type") in ("log_query", "log_stats"):
+            await self._answer_log(client, cmd)
+
+    async def _answer_log(self, client: _Client, cmd: dict[str, Any]) -> None:
+        """History requests from the Log tab. Answered to that dashboard only."""
+        def number(key: str) -> float | None:
+            value = cmd.get(key)
+            return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+        node_id = cmd.get("node_id") if isinstance(cmd.get("node_id"), int) else None
+        since, until = number("since"), number("until")
+        try:
+            if cmd["type"] == "log_stats":
+                stats = await asyncio.wrap_future(self.events.stats(node_id=node_id, since=since, until=until))
+                self._push(client, json.dumps({"type": "log_stats", "req": cmd.get("req"), "stats": stats}))
+                return
+            raw_kinds = cmd.get("kinds") if isinstance(cmd.get("kinds"), list) else []
+            kinds = [k for k in raw_kinds if isinstance(k, str)] or None
+            before = cmd.get("before_id") if isinstance(cmd.get("before_id"), int) else None
+            limit = int(number("limit") or 200)
+            events = await asyncio.wrap_future(self.events.query(
+                node_id=node_id, kinds=kinds, since=since, until=until, before_id=before, limit=limit + 1))
+        except Exception:  # a bad query must not take the connection down
+            log.exception("log request failed: %r", cmd)
+            return
+        self._push(client, json.dumps({"type": "log_result", "req": cmd.get("req"),
+                                       "events": events[:limit], "more": len(events) > limit}))
 
     async def _start_listening(self, client: _Client, node_id: int) -> None:
         if node_id in client.listening:

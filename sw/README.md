@@ -84,12 +84,20 @@ The dashboard has two tabs. **Live** lists people (with the relay they're near),
 connects to and how many people it carries) and alerts. **Topology** draws the mesh as a tree from
 the Pi down; click a person to listen. The SOS banner and the Listening panel show on both tabs.
 
+The **Log** tab shows the saved history (SOS, connections lost and back, relay failures, renames,
+gateway restarts) with filters by person, type and period, summary numbers (SOS count, time to
+acknowledge, connections lost, relay failures) and **Export CSV** for spreadsheets and reports. Events
+are kept for 90 days in `~/.local/share/oratio/events.db` (SQLite, outside the repo). After a gateway
+restart, the recent alerts and any SOS nobody acknowledged come back. To keep test runs out of the
+real history, point the simulator session at another file: `EVENTS_DB=/tmp/test.db python sw/tools/run_dev.py`
+(Windows PowerShell: `$env:EVENTS_DB="$env:TEMP\test.db"; python sw/tools/run_dev.py`).
+
 Nodes can be renamed from the dashboard (✎ next to each node): people by name, relays by place
 ("Tunnel B 200 m"). Names are shared by every open dashboard and saved on the gateway in
 `~/.local/share/oratio/node-names.json` (outside the repo), so they survive restarts. Clear a name to
 go back to "Node 3".
 
-Settings (ports, timeouts, queue sizes, names file) are in `gateway/config.py` and can be overridden with
+Settings (ports, timeouts, queue sizes, names file, events file and retention) are in `gateway/config.py` and can be overridden with
 environment variables, for example `WS_PORT=9000 python sw/gateway/main.py`.
 
 `gateway/udp_devserver.py` is a **temporary stand-in** for the UDP side: it tracks nodes and feeds

@@ -1,5 +1,6 @@
-// Live view for the gateway WebSocket server (task 128). Two tabs: Live (people, relays,
-// alerts) and Topology (the mesh tree). The SOS banner and Listening panel show on both.
+// Live view for the gateway WebSocket server (task 128). Three tabs: Live (people, relays,
+// alerts), Topology (the mesh tree) and Log (saved history). The SOS banner and Listening
+// panel show on every tab.
 // Nodes can be renamed (✎) to the person wearing them; names are stored on the gateway and
 // shared by every dashboard.
 // Connects to ws://<same host>:8000/ws, shows nodes and alerts, reconnects automatically.
@@ -47,6 +48,7 @@ function connect() {
       alerts = msg.alerts;
       openSos.clear();
       for (const a of msg.open_sos || []) openSos.set(a.node_id, a);
+      if (logLoaded) loadLog();  // reconnected: the gateway may have restarted
     } else if (msg.type === "node_update") {
       nodes.set(msg.node.node_id, msg.node);
     } else if (msg.type === "alert") {
@@ -59,6 +61,13 @@ function connect() {
       else openSos.set(a.node_id, a);
       const i = alerts.findIndex((x) => x.id === a.id);  // keep the history entry in step
       if (i >= 0) alerts[i] = a;
+      onLogUpdate(a);
+    } else if (msg.type === "log_event") {
+      onLogEvent(msg.event);
+    } else if (msg.type === "log_result") {
+      onLogResult(msg);
+    } else if (msg.type === "log_stats") {
+      onLogStats(msg);
     }
     scheduleRender();
   };
@@ -373,6 +382,7 @@ function render() {
 
   renderSos();
   renderAlerts();
+  updateLogNodeOptions();
   if (currentTab() === "topology") renderTopology();
 }
 
@@ -400,7 +410,7 @@ function renderAlerts() {
 // ---- tabs ------------------------------------------------------------------------
 // The tab lives in the address (#live, #topology), so a refresh or a shared link keeps it.
 
-const TABS = ["live", "topology"];
+const TABS = ["live", "topology", "log"];
 
 function currentTab() {
   const tab = location.hash.slice(1);
@@ -415,6 +425,7 @@ function showTab() {
   }
   topoKey = "";  // redraw when coming back to Topology
   topoCentered = false;
+  if (tab === "log" && !logLoaded) loadLog();
   scheduleRender();
 }
 
@@ -628,6 +639,229 @@ for (const container of [$("people"), $("relays"), $("waves")]) {
     if (button) toggleListen(Number(button.dataset.node));
   });
 }
+
+// ---- log -------------------------------------------------------------------------------
+// History saved on the Pi. Loaded in pages of 200 when the tab opens or a filter changes,
+// then kept current by the gateway's "log_event" messages. Summary numbers come from the
+// gateway (log_stats) so they cover the whole period, not just the rows on screen.
+
+const LOG_PAGE = 200;
+const KIND_LABELS = {
+  sos: "SOS", node_dropped: "Not responding", relay_dropped: "Relay down", node_rejoined: "Back",
+  node_seen: "Connected", renamed: "Renamed", gateway_started: "Gateway started",
+};
+const KIND_GROUPS = {
+  sos: ["sos"], lost: ["node_dropped", "relay_dropped"], back: ["node_seen", "node_rejoined"],
+  renamed: ["renamed"], gateway: ["gateway_started"],
+};
+let logEvents = [];
+let logMore = false;
+let logLoaded = false;
+let logReq = 0;          // id of the newest request; older answers are ignored
+let olderReq = null;     // the request that fetches the next page of older events
+let exportReq = null;
+let statsTimer = null;
+
+function logFilters() {
+  const node = $("log-node").value;
+  const range = $("log-range").value;
+  return {
+    node_id: node === "" ? null : Number(node),
+    kinds: KIND_GROUPS[$("log-kind").value] || null,
+    since: range === "" ? null : Date.now() / 1000 - Number(range),
+  };
+}
+
+function loadLog() {
+  logLoaded = true;
+  logReq++;
+  const f = logFilters();
+  send({ type: "log_query", req: logReq, ...f, limit: LOG_PAGE });
+  send({ type: "log_stats", req: logReq, node_id: f.node_id, since: f.since });
+}
+
+function loadOlder() {
+  if (!logEvents.length) return;
+  logReq++;
+  olderReq = logReq;
+  send({ type: "log_query", req: logReq, ...logFilters(), limit: LOG_PAGE,
+         before_id: logEvents[logEvents.length - 1].id });
+  $("log-more").disabled = true;
+}
+
+function onLogResult(msg) {
+  if (msg.req === exportReq) { exportReq = null; downloadCsv(msg.events); return; }
+  if (msg.req !== logReq) return;  // a newer filter was picked meanwhile
+  logEvents = msg.req === olderReq ? logEvents.concat(msg.events) : msg.events;
+  logMore = msg.more;
+  renderLog();
+}
+
+function onLogStats(msg) {
+  const st = msg.stats;
+  $("st-sos").textContent = st.sos;
+  $("st-sos-note").textContent = !st.sos ? "none in this period"
+    : st.sos_open ? `${st.sos_open} not acknowledged` : "all acknowledged";
+  $("st-sos-note").classList.toggle("stat-bad", st.sos_open > 0);
+  $("st-ack").textContent = st.ack_median_s === null ? "–" : duration(st.ack_median_s);
+  $("st-ack-note").textContent = st.ack_median_s === null ? "no acknowledged SOS yet"
+    : `average ${duration(st.ack_avg_s)} · slowest ${duration(st.ack_max_s)}`;
+  $("st-lost").textContent = st.counts.node_dropped || 0;
+  $("st-relay").textContent = st.counts.relay_dropped || 0;
+}
+
+function refreshStatsSoon() {
+  clearTimeout(statsTimer);
+  statsTimer = setTimeout(() => {
+    const f = logFilters();
+    send({ type: "log_stats", req: logReq, node_id: f.node_id, since: f.since });
+  }, 1000);
+}
+
+function matchesFilters(event) {
+  const f = logFilters();
+  return (f.node_id === null || event.node_id === f.node_id)
+    && (!f.kinds || f.kinds.includes(event.kind))
+    && (f.since === null || event.ts >= f.since);
+}
+
+function onLogEvent(event) {
+  if (!logLoaded) return;
+  if (matchesFilters(event) && !logEvents.some((e) => e.id === event.id)) {
+    logEvents.unshift(event);
+    if (currentTab() === "log") renderLog();
+  }
+  refreshStatsSoon();
+}
+
+function onLogUpdate(event) {  // an SOS was repeated or acknowledged
+  const i = logEvents.findIndex((e) => e.id === event.id);
+  if (i >= 0) { logEvents[i] = { ...logEvents[i], ...event }; if (currentTab() === "log") renderLog(); }
+  if (logLoaded) refreshStatsSoon();
+}
+
+function duration(seconds) {
+  if (seconds === null || seconds === undefined) return "–";
+  if (seconds < 60) return `${Math.round(seconds)} s`;
+  const m = Math.floor(seconds / 60), s = Math.round(seconds % 60);
+  return m < 60 ? `${m} min ${s} s` : `${Math.floor(m / 60)} h ${m % 60} min`;
+}
+
+function when(ts) {
+  const d = new Date(ts * 1000);
+  const today = d.toDateString() === new Date().toDateString();
+  return today ? d.toLocaleTimeString()
+    : d.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function whoName(event) {
+  return event.node_id === null || event.node_id === undefined ? "Gateway" : displayName(event.node_id);
+}
+
+// SOS outcome as text: acknowledged after N, or still open.
+function ackText(event) {
+  if (event.kind !== "sos") return "";
+  if (event.acked) return event.acked_ts ? `acknowledged after ${duration(event.acked_ts - event.ts)}` : "acknowledged";
+  return "not acknowledged";
+}
+
+function renderLog() {
+  const body = $("log-rows");
+  body.replaceChildren();
+  if (!logEvents.length) {
+    body.innerHTML = '<tr><td colspan="4" class="muted">No events match these filters.</td></tr>';
+  }
+  for (const e of logEvents) {
+    const tr = document.createElement("tr");
+    const time = document.createElement("td");
+    time.textContent = when(e.ts);
+    time.className = "log-time";
+    const type = document.createElement("td");
+    const badge = document.createElement("span");
+    badge.className = `kind kind-${e.kind}`;
+    badge.textContent = KIND_LABELS[e.kind] || e.kind;
+    type.appendChild(badge);
+    const who = document.createElement("td");
+    who.textContent = whoName(e);
+    const details = document.createElement("td");
+    details.textContent = e.message + (e.count > 1 ? ` (sent ${e.count}×)` : "");
+    const ack = ackText(e);
+    if (ack) {
+      const span = document.createElement("span");
+      span.className = e.acked ? "acked" : "not-acked";
+      span.textContent = ` · ${e.acked ? "✓ " : ""}${ack}`;
+      details.appendChild(span);
+    }
+    tr.append(time, type, who, details);
+    body.appendChild(tr);
+  }
+  $("log-shown").textContent = logEvents.length
+    ? `Showing ${logEvents.length} event${logEvents.length === 1 ? "" : "s"}${logMore ? " (newest first)" : ""}.` : "";
+  $("log-more").hidden = !logMore;
+  $("log-more").disabled = false;
+}
+
+// The "Who" list: everyone the dashboard knows, people first, then relays.
+let logNodeKey = "";
+function updateLogNodeOptions() {
+  const list = [...nodes.values()].sort((a, b) => (isRelay(a) - isRelay(b)) || a.node_id - b.node_id);
+  const key = JSON.stringify(list.map((n) => [n.node_id, displayName(n.node_id)]));
+  if (key === logNodeKey) return;
+  logNodeKey = key;
+  const select = $("log-node");
+  const chosen = select.value;
+  select.replaceChildren(new Option("Everyone", ""));
+  for (const n of list) {
+    select.appendChild(new Option(`${displayName(n.node_id)}${n.name ? ` (${isRelay(n) ? "relay" : "node"} ${n.node_id})` : ""}`,
+                                  String(n.node_id)));
+  }
+  if (chosen && !list.some((n) => String(n.node_id) === chosen)) {
+    select.appendChild(new Option(displayName(Number(chosen)), chosen));  // keep a filter on someone who left
+  }
+  select.value = chosen;
+}
+
+// ---- CSV export: asks the gateway for every matching event, then saves a file ----
+
+function exportLog() {
+  exportReq = `export-${Date.now()}`;
+  send({ type: "log_query", req: exportReq, ...logFilters(), limit: 50000 });
+  $("log-export").disabled = true;
+  $("log-export").textContent = "Preparing…";
+}
+
+function csvCell(value) {
+  const text = value === null || value === undefined ? "" : String(value);
+  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function downloadCsv(events) {
+  const header = ["id", "time_utc", "time_local", "type", "node_id", "who", "details",
+                  "acknowledged", "seconds_to_acknowledge", "times_sent"];
+  const rows = events.slice().reverse().map((e) => [
+    e.id, new Date(e.ts * 1000).toISOString(), new Date(e.ts * 1000).toLocaleString(),
+    KIND_LABELS[e.kind] || e.kind, e.node_id ?? "", whoName(e), e.message,
+    e.kind === "sos" ? (e.acked ? "yes" : "no") : "",
+    e.kind === "sos" && e.acked && e.acked_ts ? (e.acked_ts - e.ts).toFixed(1) : "",
+    e.kind === "sos" ? (e.count || 1) : "",
+  ]);
+  // The BOM makes Excel read names with accents correctly.
+  const csv = "﻿" + [header, ...rows].map((r) => r.map(csvCell).join(",")).join("\r\n");
+  const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `oratio-log-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  $("log-export").disabled = false;
+  $("log-export").textContent = "Export CSV";
+}
+
+for (const id of ["log-node", "log-kind", "log-range"]) $(id).addEventListener("change", loadLog);
+$("log-more").addEventListener("click", loadOlder);
+$("log-export").addEventListener("click", exportLog);
 
 // ---- theme ---------------------------------------------------------------------
 // Cycles auto -> light -> dark. "auto" follows the computer's setting. Saved per device.

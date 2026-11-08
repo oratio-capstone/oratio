@@ -22,7 +22,11 @@ async def gateway():
 
 
 async def recv_json(client):
-    return json.loads(await asyncio.wait_for(client.recv(), timeout=2))
+    """Next message, skipping event-log entries (tested in test_event_log.py)."""
+    while True:
+        msg = json.loads(await asyncio.wait_for(client.recv(), timeout=2))
+        if msg.get("type") != "log_event":
+            return msg
 
 
 @pytest.mark.asyncio

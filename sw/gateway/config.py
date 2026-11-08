@@ -30,4 +30,8 @@ ALERT_HISTORY = int(_get("ALERT_HISTORY", "50"))
 NAMES_FILE = _get("NAMES_FILE", os.path.join(os.path.expanduser("~"), ".local", "share", "oratio",
                                              "node-names.json"))
 
+# Event history for the Log tab (SQLite). Kept outside the repo; older events are removed at startup.
+EVENTS_DB = _get("EVENTS_DB", os.path.join(os.path.expanduser("~"), ".local", "share", "oratio", "events.db"))
+EVENTS_RETENTION_DAYS = float(_get("EVENTS_RETENTION_DAYS", "90"))
+
 LOG_LEVEL = _get("LOG_LEVEL", "INFO")

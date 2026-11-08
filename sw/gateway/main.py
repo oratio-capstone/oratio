@@ -13,6 +13,7 @@ import logging
 
 import config
 import udp_devserver  # TODO: swap for the asyncio UDP server once it exposes start(q_in, q_out, host, port)
+from event_log import EventLog
 from ws_server import WebSocketServer
 
 
@@ -25,7 +26,8 @@ async def main() -> None:
 
     ws = WebSocketServer(q_in, q_out, path=config.WS_PATH,
                          client_buffer=config.CLIENT_BUFFER, alert_history=config.ALERT_HISTORY,
-                         names_file=config.NAMES_FILE)
+                         names_file=config.NAMES_FILE,
+                         event_log=EventLog(config.EVENTS_DB, retention_days=config.EVENTS_RETENTION_DAYS))
     await ws.start(config.WS_HOST, config.WS_PORT)
     await udp_devserver.start(q_in, q_out, config.UDP_HOST, config.UDP_PORT,
                               timeout=config.HEARTBEAT_TIMEOUT_S)
