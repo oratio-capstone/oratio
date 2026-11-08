@@ -8,6 +8,186 @@
 		(company "Oratio")
 	)
 	(lib_symbols
+		(symbol "Device:C_Polarized_US"
+			(pin_numbers
+				(hide yes)
+			)
+			(pin_names
+				(offset 0.254)
+				(hide yes)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(in_pos_files yes)
+			(duplicate_pin_numbers_are_jumpers no)
+			(property "Reference" "C"
+				(at 0.635 2.54 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify left)
+				)
+			)
+			(property "Value" "C_Polarized_US"
+				(at 0.635 -2.54 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify left)
+				)
+			)
+			(property "Footprint" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Datasheet" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Description" "Polarized capacitor, US symbol"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_keywords" "cap capacitor"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_fp_filters" "CP_*"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(symbol "C_Polarized_US_0_1"
+				(polyline
+					(pts
+						(xy -2.032 0.762) (xy 2.032 0.762)
+					)
+					(stroke
+						(width 0.508)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy -1.778 2.286) (xy -0.762 2.286)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy -1.27 1.778) (xy -1.27 2.794)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(arc
+					(start -2.032 -1.27)
+					(mid 0 -0.5572)
+					(end 2.032 -1.27)
+					(stroke
+						(width 0.508)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+			)
+			(symbol "C_Polarized_US_1_1"
+				(pin passive line
+					(at 0 3.81 270)
+					(length 2.794)
+					(name ""
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at 0 -3.81 90)
+					(length 3.302)
+					(name ""
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
 		(symbol "Device:LED"
 			(pin_numbers
 				(hide yes)
@@ -1462,10 +1642,11 @@
 					)
 				)
 			)
-			(property "Footprint" ""
+			(property "Footprint" "oratio:INMP441_Breakout"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
+				(hide yes)
 				(effects
 					(font
 						(size 1.27 1.27)
@@ -2213,6 +2394,16 @@
 			(embedded_fonts no)
 		)
 	)
+	(junction
+		(at 351.79 68.58)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "d2cc56b4-b5a8-4111-9402-e20b9770774d")
+	)
+	(no_connect
+		(at 340.36 60.96)
+		(uuid "1b75586d-9537-4bcf-93af-67309fefb982")
+	)
 	(wire
 		(pts
 			(xy 294.64 67.31) (xy 294.64 64.77)
@@ -2232,6 +2423,26 @@
 			(type default)
 		)
 		(uuid "077f28d0-0e07-43f0-9fca-09ae0f32ce79")
+	)
+	(wire
+		(pts
+			(xy 351.79 68.58) (xy 351.79 60.96)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "2c160020-7072-4b69-9613-5ff3476ce4a6")
+	)
+	(wire
+		(pts
+			(xy 161.29 64.77) (xy 162.56 64.77)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "2d3863ad-101c-48d9-8188-0b840d2a57d4")
 	)
 	(wire
 		(pts
@@ -2285,6 +2496,16 @@
 	)
 	(wire
 		(pts
+			(xy 353.06 68.58) (xy 351.79 68.58)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "4687fffb-ceed-4a23-a11e-4e8ecd74211f")
+	)
+	(wire
+		(pts
 			(xy 273.05 118.11) (xy 273.05 120.65)
 		)
 		(stroke
@@ -2305,6 +2526,16 @@
 	)
 	(wire
 		(pts
+			(xy 214.63 123.19) (xy 213.36 123.19)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "4dd28beb-a9aa-424b-983a-3b3088646269")
+	)
+	(wire
+		(pts
 			(xy 336.55 63.5) (xy 336.55 60.96)
 		)
 		(stroke
@@ -2312,6 +2543,36 @@
 			(type default)
 		)
 		(uuid "5227e438-536e-4038-a923-b4bed5461f88")
+	)
+	(wire
+		(pts
+			(xy 161.29 67.31) (xy 162.56 67.31)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "6a4df4d5-67dc-4333-a0d8-c196dd088371")
+	)
+	(wire
+		(pts
+			(xy 361.95 68.58) (xy 361.95 71.12)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "72ede71d-17ec-4688-bb67-bb1b63bee451")
+	)
+	(wire
+		(pts
+			(xy 161.29 69.85) (xy 162.56 69.85)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "7f57a771-bca5-4036-9360-de7056b160d2")
 	)
 	(wire
 		(pts
@@ -2332,6 +2593,26 @@
 			(type default)
 		)
 		(uuid "8285a794-b04d-4812-90ee-e4a4f1300a4b")
+	)
+	(wire
+		(pts
+			(xy 214.63 64.77) (xy 213.36 64.77)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "8323b6ec-dbc9-4e05-924b-f67ad42ee05b")
+	)
+	(wire
+		(pts
+			(xy 161.29 62.23) (xy 162.56 62.23)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "8cce8ba3-a591-4be5-a843-c9f173f19f2d")
 	)
 	(wire
 		(pts
@@ -2385,6 +2666,16 @@
 	)
 	(wire
 		(pts
+			(xy 214.63 72.39) (xy 213.36 72.39)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "9e5d7a9e-66ea-4f46-9a26-a1b2b6f4bc53")
+	)
+	(wire
+		(pts
 			(xy 184.15 38.1) (xy 186.69 38.1)
 		)
 		(stroke
@@ -2395,6 +2686,26 @@
 	)
 	(wire
 		(pts
+			(xy 360.68 68.58) (xy 361.95 68.58)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "ae486e6d-968e-45c6-9bc5-8a9548da92a9")
+	)
+	(wire
+		(pts
+			(xy 214.63 67.31) (xy 213.36 67.31)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "afc9b16b-521b-43cb-894e-911d4741f50d")
+	)
+	(wire
+		(pts
 			(xy 257.81 118.11) (xy 260.35 118.11)
 		)
 		(stroke
@@ -2402,6 +2713,16 @@
 			(type default)
 		)
 		(uuid "b2bcdc08-dffc-4ca5-a520-4e64bfb10b94")
+	)
+	(wire
+		(pts
+			(xy 214.63 74.93) (xy 213.36 74.93)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "b643bc22-528c-4b69-b6ee-b4e06f3d5464")
 	)
 	(wire
 		(pts
@@ -2435,6 +2756,16 @@
 	)
 	(wire
 		(pts
+			(xy 214.63 77.47) (xy 213.36 77.47)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "d2e5d339-d2dc-4b3d-982e-ebc5becca7ff")
+	)
+	(wire
+		(pts
 			(xy 257.81 49.53) (xy 257.81 52.07)
 		)
 		(stroke
@@ -2455,7 +2786,7 @@
 	)
 	(wire
 		(pts
-			(xy 351.79 64.77) (xy 351.79 60.96)
+			(xy 351.79 74.93) (xy 351.79 68.58)
 		)
 		(stroke
 			(width 0)
@@ -2483,7 +2814,7 @@
 		)
 		(uuid "fa5c20a4-f761-494a-b05e-f8eb0dbbdcb9")
 	)
-	(label "SHUTDOWN_GPIO"
+	(label "SD_MODE"
 		(at 344.17 60.96 270)
 		(effects
 			(font
@@ -2492,6 +2823,56 @@
 			(justify right bottom)
 		)
 		(uuid "0161267a-1aaa-463c-b545-ccff794a6006")
+	)
+	(label "MIC_SD"
+		(at 161.29 67.31 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "2b765078-f88c-4a5d-acdf-570fb8003d88")
+	)
+	(label "SPK_DIN"
+		(at 214.63 64.77 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "352339a3-53ce-4b3a-89c3-fc67790f34d4")
+	)
+	(label "MIC_SCK"
+		(at 161.29 62.23 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "384454e6-76a0-473a-86a7-cfd3784f23ff")
+	)
+	(label "SD_MODE"
+		(at 214.63 123.19 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "38a082ed-c6b0-48e8-a955-2dbed586bce3")
+	)
+	(label "LED2_GPIO"
+		(at 214.63 74.93 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "3f0cd580-8411-434a-81aa-f0ea7eed365b")
 	)
 	(label "SPK_WS"
 		(at 328.93 63.5 270)
@@ -2543,6 +2924,16 @@
 		)
 		(uuid "723a6eaa-3a8b-497d-9381-0f737161bbdc")
 	)
+	(label "SPK_WS"
+		(at 214.63 67.31 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "77fd2d3c-1e69-4410-b9c2-28276285f7dd")
+	)
 	(label "SPK_DIN"
 		(at 336.55 63.5 270)
 		(effects
@@ -2563,6 +2954,16 @@
 		)
 		(uuid "7cf345a8-8e70-47ae-ad5c-444161438e7f")
 	)
+	(label "LED3_GPIO"
+		(at 214.63 77.47 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "92b13092-0917-4414-95a7-7c837f596813")
+	)
 	(label "MIC_SD"
 		(at 298.45 74.93 270)
 		(effects
@@ -2572,6 +2973,26 @@
 			(justify right bottom)
 		)
 		(uuid "9e7411ed-a7f2-484d-92dc-5f52dd6e791d")
+	)
+	(label "MIC_WS"
+		(at 161.29 64.77 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "a7c137f1-cdab-4d52-b0bd-1cb1eac0c6d1")
+	)
+	(label "LED1_GPIO"
+		(at 214.63 72.39 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "bbb9a1a7-8b6d-4c3e-98a3-9cd0a8e28daf")
 	)
 	(label "LED2_GPIO"
 		(at 246.38 40.64 90)
@@ -2602,6 +3023,16 @@
 			(justify left bottom)
 		)
 		(uuid "cc7c7d31-4ad2-4560-b351-23e85a11a133")
+	)
+	(label "SPK_SCK"
+		(at 161.29 69.85 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "ef47a56e-e33b-4ecf-b094-f12f2abac7a3")
 	)
 	(symbol
 		(lib_id "power:GND")
@@ -3047,6 +3478,84 @@
 	)
 	(symbol
 		(lib_id "power:GND")
+		(at 361.95 71.12 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "355ca372-303f-46dd-b728-0b85f3631dff")
+		(property "Reference" "#PWR013"
+			(at 361.95 77.47 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "GND"
+			(at 361.95 76.2 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 361.95 71.12 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 361.95 71.12 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
+			(at 361.95 71.12 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "762f351d-dcca-4d88-9770-2b52822b980e")
+		)
+		(instances
+			(project "oratio-pcb-1"
+				(path "/b0fd83f5-9508-4397-98e1-74e2df734dfe"
+					(reference "#PWR013")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:GND")
 		(at 246.38 59.69 0)
 		(unit 1)
 		(body_style 1)
@@ -3469,8 +3978,8 @@
 		)
 	)
 	(symbol
-		(lib_id "power:+5V")
-		(at 351.79 64.77 180)
+		(lib_id "Device:C_Polarized_US")
+		(at 356.87 68.58 90)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -3479,10 +3988,9 @@
 		(in_pos_files yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "8182819f-d872-44cc-a8d8-bb2451fbf76f")
-		(property "Reference" "#PWR012"
-			(at 351.79 60.96 0)
-			(hide yes)
+		(uuid "677c807e-f758-46ce-b664-f1a8bf13161e")
+		(property "Reference" "C1"
+			(at 356.235 60.96 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -3491,8 +3999,8 @@
 				)
 			)
 		)
-		(property "Value" "+5V"
-			(at 351.79 69.85 0)
+		(property "Value" "100uF"
+			(at 356.235 63.5 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -3501,8 +4009,8 @@
 				)
 			)
 		)
-		(property "Footprint" ""
-			(at 351.79 64.77 0)
+		(property "Footprint" "Capacitor_THT:CP_Radial_D5.0mm_P2.00mm"
+			(at 356.87 68.58 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3513,7 +4021,88 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 351.79 64.77 0)
+			(at 356.87 68.58 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Polarized capacitor, US symbol"
+			(at 356.87 68.58 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "e14a1c5d-f0a3-4c01-b025-09161f06ea4d")
+		)
+		(pin "2"
+			(uuid "588cd97c-e33c-4ab9-b5fa-7606a1a0e94a")
+		)
+		(instances
+			(project "oratio-pcb-1"
+				(path "/b0fd83f5-9508-4397-98e1-74e2df734dfe"
+					(reference "C1")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:+5V")
+		(at 351.79 74.93 180)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "8182819f-d872-44cc-a8d8-bb2451fbf76f")
+		(property "Reference" "#PWR012"
+			(at 351.79 71.12 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "+5V"
+			(at 351.79 80.01 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 351.79 74.93 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 351.79 74.93 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3524,7 +4113,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"+5V\""
-			(at 351.79 64.77 0)
+			(at 351.79 74.93 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -3658,7 +4247,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal"
+		(property "Footprint" "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal"
 			(at 258.826 56.134 90)
 			(hide yes)
 			(show_name no)
@@ -4085,7 +4674,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal"
+		(property "Footprint" "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal"
 			(at 235.966 56.134 90)
 			(hide yes)
 			(show_name no)
@@ -4494,7 +5083,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal"
+		(property "Footprint" "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal"
 			(at 247.396 56.134 90)
 			(hide yes)
 			(show_name no)
