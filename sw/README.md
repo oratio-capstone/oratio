@@ -90,7 +90,8 @@ acknowledge, connections lost, relay failures) and **Export CSV** for spreadshee
 are kept for 90 days in `~/.local/share/oratio/events.db` (SQLite, outside the repo). After a gateway
 restart, the recent alerts and any SOS nobody acknowledged come back. To keep test runs out of the
 real history, point the simulator session at another file: `EVENTS_DB=/tmp/test.db python sw/tools/run_dev.py`
-(Windows PowerShell: `$env:EVENTS_DB="$env:TEMP\test.db"; python sw/tools/run_dev.py`).
+(Windows Command Prompt: `set EVENTS_DB=%TEMP%\test.db`, then `python sw/tools/run_dev.py`;
+PowerShell: `$env:EVENTS_DB="$env:TEMP\test.db"; python sw/tools/run_dev.py`).
 
 Nodes can be renamed from the dashboard (✎ next to each node): people by name, relays by place
 ("Tunnel B 200 m"). Names are shared by every open dashboard and saved on the gateway in
