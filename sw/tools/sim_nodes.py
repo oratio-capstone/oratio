@@ -7,11 +7,12 @@ relay is clearly stronger, the way Mesh-Lite does. Signal strength falls with di
 
 Each node has its own UDP socket (so its own source port, like a real node) and sends:
   - a heartbeat every second: role, mesh level, RSSI to parent, parent MAC, own MAC
-  - if it is a talker, push-to-talk like a radio: it holds the talk button for 4-10 s
-    (a 'P' packet each second), then releases it for 8-20 s
-  - microphone audio (20 ms frames, a speech-like signal, a different pitch per node) while
-    the talk button is held, or while the gateway asks for it (an SOS or an emergency
-    listen: the 'N' control packet); quiet background sound when the wearer isn't talking
+  - if it is a talker, speech in the open group channel: it speaks for 4-10 s, then is
+    quiet for 8-20 s, sending microphone audio (20 ms frames, a speech-like signal, a
+    different pitch per node) while it speaks (no talk button: the device sends when it
+    hears speech)
+  - microphone audio whenever the gateway asks for it (an SOS or an emergency listen: the
+    'N' control packet), quiet background sound when the wearer isn't speaking
 Optional events: a node going silent (dropped) or sending an SOS at a given time.
 When a relay goes silent, everything behind it goes quiet for --reroute seconds while
 the mesh finds new parents, then carries on through another relay.
@@ -148,14 +149,13 @@ class SimNode:
         return struct.pack(f"<{SAMPLES_PER_FRAME}h", *samples)  # 16-bit little-endian PCM
 
     async def talk(self) -> None:
-        """Talk in bursts with the talk button held, like a radio. Starts talking right away."""
+        """Speak in bursts in the group channel. Starts right away. No talk button, so no 'P'
+        packets: the gateway can't hear this to anyone's dashboard unless there's an SOS or an
+        emergency listen."""
         while True:
             self.talking = True
-            for _ in range(round(self.rng.uniform(4, 10))):
-                self.send(protocol.TYPE_TALK, protocol.build_talk(True))  # repeated: a lost packet doesn't matter
-                await asyncio.sleep(1.0)
+            await asyncio.sleep(self.rng.uniform(4, 10))
             self.talking = False
-            self.send(protocol.TYPE_TALK, protocol.build_talk(False))
             await asyncio.sleep(self.rng.uniform(8, 20))
 
     async def audio(self) -> None:

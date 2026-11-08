@@ -22,11 +22,12 @@ Browser protocol (all text frames are JSON):
                         {"type": "log_event", "event": {...}}   every new log entry, alerts included
 
 Who can be heard (the gateway enforces this, not just the page):
-    A dashboard may listen to a node only while that worker holds the talk button, or
-    while their SOS is open. Anything else needs an Emergency listen: always allowed,
+    A dashboard may listen to a node only while that worker's SOS is open (SOS button, or
+    later the voice keyword). Anything else needs an Emergency listen: always allowed,
     always logged, and the device is told so it can show the wearer (LED / beep).
-    When the talk button is released, listens that relied on it end after a short grace.
     A listen that started during an SOS carries on after the SOS is acknowledged.
+    Talk button: supported but unused (the devices have none). If one is added, holding it
+    also allows listening, and those listens end shortly after it is released.
     server -> browser   {"type": "listen_denied", "node_id": 3, "message": "..."}
                         {"type": "listen_ended", "node_id": 3, "message": "..."}
 
@@ -522,7 +523,7 @@ class WebSocketServer:
         if reason is None or node_id not in self.nodes:
             self._push(client, json.dumps({
                 "type": "listen_denied", "node_id": node_id,
-                "message": f"{self.label(node_id)} isn't talking and has no open SOS. "
+                "message": f"{self.label(node_id)} has no open SOS. "
                            "Use Emergency listen if they may be in danger."}))
             return
         if reason == "emergency":

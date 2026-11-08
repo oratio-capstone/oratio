@@ -113,8 +113,9 @@ function onAudio(buffer) {
   stream.lastFrameAt = performance.now();
 }
 
-// Listening is allowed while the worker holds the talk button or has an open SOS; the
-// gateway enforces this. Otherwise the only way in is a confirmed Emergency listen.
+// Listening is allowed while the worker has an open SOS (or holds a talk button, if the
+// devices ever get one); the gateway enforces this. Otherwise the only way in is a
+// confirmed Emergency listen.
 function canListen(id) {
   return Boolean(nodes.get(id)?.talking) || openSos.has(id);
 }
@@ -432,7 +433,7 @@ function render() {
     if (row.button.textContent !== label) row.button.textContent = label;
     row.button.classList.toggle("on", Boolean(stream));
     row.button.disabled = !stream && !allowed;
-    row.button.title = stream || allowed ? "" : `Available while ${displayName(n.node_id)} holds talk or has an SOS`;
+    row.button.title = stream || allowed ? "" : `Available during an SOS from ${displayName(n.node_id)}`;
     row.emergency.hidden = Boolean(stream) || allowed;
   });
 

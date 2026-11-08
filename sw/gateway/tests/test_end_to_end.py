@@ -32,7 +32,7 @@ async def test_simulated_nodes_show_up_and_drop():
     try:
         async with connect(f"ws://127.0.0.1:{ws_port}/ws") as client:
             await client.recv()  # snapshot
-            asked = False  # listen once node 1 is holding its talk button
+            asked = False  # listen to node 3 once its SOS arrives (allowed only then)
             seen, statuses, alerts, audio_frames, latest = set(), {}, set(), 0, {}
             deadline = asyncio.get_running_loop().time() + 1.8
             while asyncio.get_running_loop().time() < deadline:
@@ -42,18 +42,19 @@ async def test_simulated_nodes_show_up_and_drop():
                     continue
                 if isinstance(msg, bytes):
                     audio_frames += 1
-                    assert len(msg) == 2 + 640
+                    assert len(msg) == 2 + 640 and msg[:2] == (3).to_bytes(2, "big")
                     continue
                 data = json.loads(msg)
                 if data["type"] == "node_update":
                     seen.add(data["node"]["node_id"])
                     statuses[data["node"]["node_id"]] = data["node"]["status"]
                     latest[data["node"]["node_id"]] = data["node"]
-                    if data["node"]["node_id"] == 1 and data["node"]["talking"] and not asked:
-                        await client.send(json.dumps({"type": "listen", "node_id": 1}))
-                        asked = True
+
                 elif data["type"] == "alert":
                     alerts.add((data["alert"]["kind"], data["alert"]["node_id"]))
+                    if data["alert"]["kind"] == "sos" and not asked:
+                        await client.send(json.dumps({"type": "listen", "node_id": 3}))
+                        asked = True
         assert seen == {1, 2, 3, 101, 102}
         # The tree is resolved from the simulated MACs: relay 101 hangs off the Pi, 102 off 101,
         # and a worker is near one of the relays.
@@ -62,7 +63,7 @@ async def test_simulated_nodes_show_up_and_drop():
         assert latest[1]["role"] == "worker" and latest[1]["near"] in (101, 102)
         assert statuses[2] == "dropped"
         assert ("node_dropped", 2) in alerts and ("sos", 3) in alerts
-        assert audio_frames > 10  # node 1 talks at 50 frames/s
+        assert audio_frames > 10  # node 3 streams its microphone once the gateway asks (SOS)
     finally:
         sim.cancel()
         for task in udp._tasks:
