@@ -19,9 +19,13 @@ def test_short_datagram_is_rejected_not_crashing():
 
 
 def test_heartbeat_telemetry():
-    payload = protocol.build_heartbeat(-61, 2.5, 4.0)
-    assert protocol.parse_heartbeat(payload) == (-61, 2.5, 4.0)
+    payload = protocol.build_heartbeat("relay", 2, -61, "02:00:00:00:00:01", "02:00:00:00:00:0a")
+    assert len(payload) == 15
+    hb = protocol.parse_heartbeat(payload)
+    assert hb == ("relay", 2, -61, "02:00:00:00:00:01", "02:00:00:00:00:0a")
+    assert hb.role == "relay" and hb.rssi == -61
     assert protocol.parse_heartbeat(b"") is None
+    assert protocol.parse_heartbeat(payload[:-1]) is None  # truncated
 
 
 def test_audio_frame_size():

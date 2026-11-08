@@ -12,6 +12,17 @@ the firmware team):
 
 The heartbeat payload layout and the 'A' / 'S' type characters below are
 proposals until the firmware defines them.
+
+Heartbeat payload (proposal sent to the firmware team), 15 bytes:
+
+    byte 3        role: 0 = worker (worn by a person), 1 = relay (fixed in place)
+    byte 4        mesh level, root = 1                   esp_mesh_lite_get_level()
+    byte 5        RSSI to parent in dBm, signed           esp_wifi_sta_get_ap_info()
+    bytes 6-11    parent's BSSID (its SoftAP MAC)        esp_wifi_sta_get_ap_info()
+    bytes 12-17   this node's own SoftAP MAC             esp_wifi_get_mac(WIFI_IF_AP)
+
+The gateway matches each node's parent BSSID to the node with that SoftAP MAC,
+which gives the mesh tree. A level-1 node's parent is the Pi's access point.
 """
 
 from __future__ import annotations
@@ -26,8 +37,10 @@ TYPE_HEARTBEAT = b"H"
 TYPE_AUDIO = b"A"  # proposal
 TYPE_SOS = b"S"  # proposal
 
-# Heartbeat payload (proposal): link RSSI in dBm (int8), relative position x, y in metres (float32).
-HEARTBEAT = struct.Struct(">bff")
+HEARTBEAT = struct.Struct(">BBb6s6s")
+ROLE_WORKER = 0
+ROLE_RELAY = 1
+ROLES = {ROLE_WORKER: "worker", ROLE_RELAY: "relay"}
 
 # Shared audio format (fw/lib/audio/audio_common.h): 16 kHz, 16-bit PCM, 20 ms frames.
 SAMPLE_RATE = 16_000
@@ -54,12 +67,30 @@ def build(msg_type: bytes, node_id: int, payload: bytes = b"") -> bytes:
     return HEADER.pack(msg_type, node_id) + payload
 
 
-def parse_heartbeat(payload: bytes) -> tuple[int, float, float] | None:
-    """Return (rssi, x, y), or None if the heartbeat carries no telemetry."""
+class Heartbeat(NamedTuple):
+    role: str          # "worker" or "relay"
+    level: int         # hops from the Pi; root = 1
+    rssi: int          # signal to parent, dBm
+    parent_mac: str    # "aa:bb:cc:dd:ee:ff"
+    mac: str           # this node's SoftAP MAC
+
+
+def mac_str(raw: bytes) -> str:
+    return ":".join(f"{b:02x}" for b in raw)
+
+
+def mac_bytes(mac: str) -> bytes:
+    return bytes(int(part, 16) for part in mac.split(":"))
+
+
+def parse_heartbeat(payload: bytes) -> Heartbeat | None:
+    """Decode the telemetry, or None if the heartbeat is too short to carry it."""
     if len(payload) < HEARTBEAT.size:
         return None
-    return HEARTBEAT.unpack_from(payload)
+    role, level, rssi, parent, own = HEARTBEAT.unpack_from(payload)
+    return Heartbeat(ROLES.get(role, "worker"), level, rssi, mac_str(parent), mac_str(own))
 
 
-def build_heartbeat(rssi: int, x: float, y: float) -> bytes:
-    return HEARTBEAT.pack(rssi, x, y)
+def build_heartbeat(role: str, level: int, rssi: int, parent_mac: str, mac: str) -> bytes:
+    role_code = ROLE_RELAY if role == "relay" else ROLE_WORKER
+    return HEARTBEAT.pack(role_code, level, rssi, mac_bytes(parent_mac), mac_bytes(mac))

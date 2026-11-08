@@ -56,14 +56,19 @@ With the environment activated, from the repo root:
 python sw/tools/run_dev.py
 ```
 
-That starts the gateway (UDP 8989, WebSocket 8000), the dashboard page (port 8080) and ten fake
-nodes in one terminal, with each line labelled `[gateway]`, `[web]` or `[sim]`, and opens
-http://localhost:8080. Node 3 goes silent at 10 s (marked dropped about 3 s later) and node 5 raises
-an SOS at 15 s. **Ctrl+C stops all three.**
+That starts the gateway (UDP 8989, WebSocket 8000), the dashboard page (port 8080) and a simulated
+mesh in one terminal, with each line labelled `[gateway]`, `[web]` or `[sim]`, and opens
+http://localhost:8080. **Ctrl+C stops all three.**
+
+The simulated mesh is a tunnel with the Pi at the entrance, three fixed relays (101, 102, 103; 101 is
+the root) and ten people (nodes 1–10) walking up and down it, each joining the relay they hear best.
+By default: node 3 goes silent at 10 s (marked dropped about 3 s later), node 5 raises an SOS at
+15 s, and relay 102 dies at 25 s so you can watch the people behind it reroute on the Topology tab.
 
 | Variant | Command |
 | --- | --- |
 | Different simulation (any `sim_nodes.py` option) | `python sw/tools/run_dev.py --nodes 6 --talkers 2` |
+| More relays, further apart | `python sw/tools/run_dev.py --relays 5 --spacing 80` |
 | Gateway + page only, e.g. with a real ESP | `python sw/tools/run_dev.py --no-sim` |
 | Don't open the browser | `python sw/tools/run_dev.py --no-browser` |
 
@@ -75,8 +80,12 @@ python -m http.server 8080 --directory sw/web
 python sw/tools/sim_nodes.py --talkers 1 --drop 3:10 --sos 5:15
 ```
 
-Nodes can be renamed from the dashboard (✎ next to each node), for example to the person wearing the
-device. Names are shared by every open dashboard and saved on the gateway in
+The dashboard has two tabs. **Live** lists people (with the relay they're near), relays (what each
+connects to and how many people it carries) and alerts. **Topology** draws the mesh as a tree from
+the Pi down; click a person to listen. The SOS banner and the Listening panel show on both tabs.
+
+Nodes can be renamed from the dashboard (✎ next to each node): people by name, relays by place
+("Tunnel B 200 m"). Names are shared by every open dashboard and saved on the gateway in
 `~/.local/share/oratio/node-names.json` (outside the repo), so they survive restarts. Clear a name to
 go back to "Node 3".
 

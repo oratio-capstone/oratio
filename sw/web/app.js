@@ -1,4 +1,5 @@
-// Live view for the gateway WebSocket server (starting point for task 128).
+// Live view for the gateway WebSocket server (task 128). Two tabs: Live (people, relays,
+// alerts) and Topology (the mesh tree). The SOS banner and Listening panel show on both.
 // Nodes can be renamed (✎) to the person wearing them; names are stored on the gateway and
 // shared by every dashboard.
 // Connects to ws://<same host>:8000/ws, shows nodes and alerts, reconnects automatically.
@@ -168,12 +169,15 @@ function drawWaves() {
   requestAnimationFrame(drawWaves);
 }
 
-// ---- table and alerts ----------------------------------------------------------
+// ---- tables and alerts ---------------------------------------------------------
 
 // Rows are created once per node and then updated in place. Rebuilding the table on every
 // update replaced the buttons several times a second, so clicks between mouse-down and
 // mouse-up were lost.
-const rows = new Map();  // node_id -> { tr, cells: [td...], button }
+const tables = {
+  people: { body: $("people"), rows: new Map(), cols: 6, empty: "Waiting for nodes…" },
+  relays: { body: $("relays"), rows: new Map(), cols: 5, empty: "No relays yet" },
+};
 let renderQueued = false;
 
 function scheduleRender() {
@@ -185,11 +189,11 @@ function scheduleRender() {
 
 // Signal strength (RSSI to the node's parent) -> label and colour class.
 function linkQuality(dbm) {
-  if (dbm === null || dbm === undefined) return { text: "–", cls: "" };
-  if (dbm >= -50) return { text: `${dbm} · excellent`, cls: "link-good" };
-  if (dbm >= -67) return { text: `${dbm} · good`, cls: "link-good" };
-  if (dbm >= -80) return { text: `${dbm} · weak`, cls: "link-weak" };
-  return { text: `${dbm} · poor`, cls: "link-poor" };
+  if (dbm === null || dbm === undefined) return { text: "–", cls: "", level: "none" };
+  if (dbm >= -50) return { text: `${dbm} · excellent`, cls: "link-good", level: "good" };
+  if (dbm >= -67) return { text: `${dbm} · good`, cls: "link-good", level: "good" };
+  if (dbm >= -80) return { text: `${dbm} · weak`, cls: "link-weak", level: "weak" };
+  return { text: `${dbm} · poor`, cls: "link-poor", level: "poor" };
 }
 
 function ago(ts) {
@@ -197,21 +201,51 @@ function ago(ts) {
   return s < 60 ? `${s.toFixed(0)} s ago` : `${(s / 60).toFixed(0)} min ago`;
 }
 
-// Name shown for a node: the person's name if one was given, otherwise "Node 3".
+const isRelay = (n) => n?.role === "relay";
+
+// Name shown for a node: the name given on the dashboard (a person for a worn device, a
+// place for a relay), otherwise "Node 3" / "Relay 101".
 function displayName(id) {
-  return nodes.get(id)?.name || `Node ${id}`;
+  const n = nodes.get(id);
+  return n?.name || (isRelay(n) ? `Relay ${id}` : `Node ${id}`);
 }
 
-function rowFor(id) {
-  let row = rows.get(id);
+// The next hop towards the Pi: 0 is the Pi itself.
+function hopName(id) {
+  if (id === 0) return "Pi";
+  return id === null || id === undefined ? "–" : displayName(id);
+}
+
+// Ids of a node's parents up to the root (the Pi itself excluded).
+function ancestors(id) {
+  const chain = [];
+  let parent = nodes.get(id)?.parent;
+  while (parent && nodes.has(parent) && parent !== id && !chain.includes(parent)) {
+    chain.push(parent);
+    parent = nodes.get(parent).parent;
+  }
+  return chain;
+}
+
+// People whose connection to the Pi currently runs through this relay.
+function carriedBy(relayId) {
+  return [...nodes.values()]
+    .filter((n) => !isRelay(n) && n.status === "active" && ancestors(n.node_id).includes(relayId))
+    .map((n) => n.node_id);
+}
+
+function rowFor(table, id) {
+  let row = table.rows.get(id);
   if (!row) {
     const tr = document.createElement("tr");
-    const cells = Array.from({ length: 5 }, () => tr.appendChild(document.createElement("td")));
-    const button = document.createElement("button");
-    button.dataset.node = id;
-    tr.appendChild(document.createElement("td")).appendChild(button);
-    row = { tr, cells, button, nameEl: null, idEl: null };
-    rows.set(id, row);
+    const cells = Array.from({ length: table.cols }, () => tr.appendChild(document.createElement("td")));
+    row = { tr, cells, button: null, nameEl: null, idEl: null };
+    if (table === tables.people) {
+      row.button = document.createElement("button");
+      row.button.dataset.node = id;
+      cells[table.cols - 1].appendChild(row.button);
+    }
+    table.rows.set(id, row);
     buildNameCell(row, id);
   }
   return row;
@@ -227,11 +261,16 @@ function buildNameCell(row, id) {
   rename.className = "rename";
   rename.dataset.rename = id;
   rename.title = "Rename";
-  rename.setAttribute("aria-label", `Rename node ${id}`);
+  rename.setAttribute("aria-label", `Rename ${displayName(id)}`);
   rename.textContent = "✎";
   row.cells[0].replaceChildren(nameEl, idEl, rename);
   row.nameEl = nameEl;
   row.idEl = idEl;
+}
+
+function setCell(cell, text, cls = "") {
+  if (cell.textContent !== text) cell.textContent = text;
+  if (cell.className !== cls) cell.className = cls;
 }
 
 // ---- renaming --------------------------------------------------------------------
@@ -240,14 +279,15 @@ let editingId = null;
 
 function startRename(id) {
   if (editingId !== null) return;
+  const row = tables.people.rows.get(id) || tables.relays.rows.get(id);
+  if (!row) return;
   editingId = id;
-  const row = rows.get(id);
   const input = document.createElement("input");
   input.className = "name-input";
   input.maxLength = 32;
-  input.placeholder = "Name, e.g. Alex";
+  input.placeholder = isRelay(nodes.get(id)) ? "Place, e.g. Tunnel B 200 m" : "Name, e.g. Alex";
   input.value = nodes.get(id)?.name || "";
-  input.setAttribute("aria-label", `Name for node ${id}`);
+  input.setAttribute("aria-label", `Name for ${displayName(id)}`);
   let done = false;
   const finish = (save) => {
     if (done) return;
@@ -267,51 +307,82 @@ function startRename(id) {
   input.select();
 }
 
-function render() {
-  const sorted = [...nodes.values()].sort((a, b) => a.node_id - b.node_id);
-  const active = sorted.filter((n) => n.status === "active").length;
-  $("counts").textContent = sorted.length ? `${active} active / ${sorted.length}` : "";
-
-  const body = $("nodes");
-  if (!sorted.length) {
-    rows.clear();
-    body.innerHTML = '<tr><td colspan="6" class="muted">Waiting for nodes…</td></tr>';
-  } else {
-    if (!rows.size) body.replaceChildren();  // remove the "waiting" row once
-    sorted.forEach((n, index) => {
-      const row = rowFor(n.node_id);
-      const { tr, cells, button } = row;
-      const pos = n.pos ? `${n.pos[0].toFixed(1)}, ${n.pos[1].toFixed(1)}` : "–";
-      const link = linkQuality(n.link);
-      if (editingId !== n.node_id) {
-        const name = displayName(n.node_id);
-        const suffix = n.name ? ` · node ${n.node_id}` : "";
-        if (row.nameEl.textContent !== name) row.nameEl.textContent = name;
-        if (row.idEl.textContent !== suffix) row.idEl.textContent = suffix;
-      }
-      const values = [null, n.status, link.text, pos, ago(n.last_seen)];
-      values.forEach((value, i) => {
-        if (i > 0 && cells[i].textContent !== String(value)) cells[i].textContent = value;
-      });
-      cells[1].className = `status-${n.status}`;
-      // A dropped node's last reading is stale, so it is shown greyed out.
-      cells[2].className = n.status === "dropped" ? "muted" : link.cls;
-      const stream = listening.get(n.node_id);
-      const label = stream ? `Stop (${seconds(stream)} s)` : "Listen";
-      if (button.textContent !== label) button.textContent = label;
-      button.classList.toggle("on", Boolean(stream));
-      if (body.children[index] !== tr) body.insertBefore(tr, body.children[index] || null);
-    });
+// Puts each node of `list` in a row of `table`, in order, updating rows in place.
+function fillTable(table, list, update) {
+  const ids = new Set(list.map((n) => n.node_id));
+  for (const [id, row] of table.rows) {
+    if (!ids.has(id)) { row.tr.remove(); table.rows.delete(id); }  // e.g. its role became known
   }
+  if (!list.length) {
+    if (!table.body.querySelector(".empty")) {
+      table.body.innerHTML = `<tr class="empty"><td colspan="${table.cols}" class="muted">${table.empty}</td></tr>`;
+    }
+    return;
+  }
+  table.body.querySelector(".empty")?.remove();
+  list.forEach((n, index) => {
+    const row = rowFor(table, n.node_id);
+    if (editingId !== n.node_id) {
+      const name = displayName(n.node_id);
+      const suffix = n.name ? ` · ${isRelay(n) ? "relay" : "node"} ${n.node_id}` : "";
+      if (row.nameEl.textContent !== name) row.nameEl.textContent = name;
+      if (row.idEl.textContent !== suffix) row.idEl.textContent = suffix;
+    }
+    update(n, row);
+    if (table.body.children[index] !== row.tr) table.body.insertBefore(row.tr, table.body.children[index] || null);
+  });
+}
+
+function countText(list) {
+  const active = list.filter((n) => n.status === "active").length;
+  return list.length ? `${active} active / ${list.length}` : "";
+}
+
+function render() {
+  const all = [...nodes.values()].sort((a, b) => a.node_id - b.node_id);
+  const people = all.filter((n) => !isRelay(n));
+  const relays = all.filter(isRelay);
+  $("people-count").textContent = countText(people);
+  $("relay-count").textContent = countText(relays);
+
+  fillTable(tables.people, people, (n, row) => {
+    // A dropped node's last reading is stale, so it is shown greyed out.
+    const stale = n.status === "dropped";
+    const link = linkQuality(n.link);
+    setCell(row.cells[1], n.status, `status-${n.status}`);
+    setCell(row.cells[2], n.near ? displayName(n.near) : n.parent === 0 ? "Pi" : "–", stale ? "muted" : "");
+    setCell(row.cells[3], link.text, stale ? "muted" : link.cls);
+    setCell(row.cells[4], ago(n.last_seen));
+    const stream = listening.get(n.node_id);
+    const label = stream ? `Stop (${seconds(stream)} s)` : "Listen";
+    if (row.button.textContent !== label) row.button.textContent = label;
+    row.button.classList.toggle("on", Boolean(stream));
+  });
+
+  fillTable(tables.relays, relays, (n, row) => {
+    const stale = n.status === "dropped";
+    const link = linkQuality(n.link);
+    const carried = stale ? [] : carriedBy(n.node_id);
+    setCell(row.cells[1], n.status, `status-${n.status}`);
+    setCell(row.cells[2], hopName(n.parent), stale ? "muted" : "");
+    setCell(row.cells[3], link.text, stale ? "muted" : link.cls);
+    setCell(row.cells[4], stale ? "–" : carried.length === 1 ? "1 person" : `${carried.length} people`,
+            stale ? "muted" : "");
+    row.cells[4].title = carried.map(displayName).join(", ");
+  });
 
   renderSos();
+  renderAlerts();
+  if (currentTab() === "topology") renderTopology();
+}
 
+function renderAlerts() {
   const list = $("alerts");
   list.replaceChildren();
   if (!alerts.length) list.innerHTML = '<li class="muted">No alerts</li>';
   for (const a of [...alerts].reverse()) {
     const li = document.createElement("li");
-    li.className = a.kind === "sos" ? "sos" : "";
+    li.className = a.kind === "sos" ? "sos" : a.kind === "relay_dropped" ? "relay-down" : "";
     const repeats = a.count > 1 ? ` (sent ${a.count}×)` : "";
     li.textContent = `${new Date(a.ts * 1000).toLocaleTimeString()} — ${a.message}${repeats}`;
     if (a.kind === "sos" && a.acked) {
@@ -325,6 +396,171 @@ function render() {
     list.appendChild(li);
   }
 }
+
+// ---- tabs ------------------------------------------------------------------------
+// The tab lives in the address (#live, #topology), so a refresh or a shared link keeps it.
+
+const TABS = ["live", "topology"];
+
+function currentTab() {
+  const tab = location.hash.slice(1);
+  return TABS.includes(tab) ? tab : "live";
+}
+
+function showTab() {
+  const tab = currentTab();
+  for (const t of TABS) {
+    $(`panel-${t}`).hidden = t !== tab;
+    $(`tab-${t}`).setAttribute("aria-selected", String(t === tab));
+  }
+  topoKey = "";  // redraw when coming back to Topology
+  topoCentered = false;
+  scheduleRender();
+}
+
+window.addEventListener("hashchange", showTab);
+
+// ---- topology ----------------------------------------------------------------------
+// A tree from the Pi down: relays as squares, people as circles, lines coloured by the
+// child's signal to its parent. Redrawn only when something visible changes, so a click
+// is never lost to a redraw.
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+const TOPO_COL = 84;    // horizontal space per leaf
+const TOPO_ROW = 96;    // vertical space per mesh level
+const TOPO_PAD = 44;
+let topoKey = "";
+let topoCentered = false;  // centre the Pi once when the tab opens, then leave scrolling to the user
+
+function svgEl(tag, attrs = {}, parent = null) {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+  if (parent) parent.appendChild(el);
+  return el;
+}
+
+function shortName(text, max = 13) {
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+function renderTopology() {
+  const all = [...nodes.values()];
+  const key = JSON.stringify(all.map((n) => [n.node_id, n.parent, n.role, n.status, n.name,
+    linkQuality(n.link).level, listening.has(n.node_id), openSos.has(n.node_id)]).sort());
+  if (key === topoKey) return;
+  topoKey = key;
+
+  // Children of each node; 0 is the Pi.
+  const kids = new Map();
+  for (const n of all) {
+    if (n.parent === null || n.parent === undefined || (n.parent !== 0 && !nodes.has(n.parent))) continue;
+    if (!kids.has(n.parent)) kids.set(n.parent, []);
+    kids.get(n.parent).push(n);
+  }
+  const order = (a, b) => (isRelay(b) - isRelay(a)) || a.node_id - b.node_id;  // relays first: the backbone
+
+  // Leaves get consecutive columns; a parent sits centred over its children.
+  const pos = new Map();
+  let leaves = 0, depthMax = 0;
+  const place = (id, depth) => {
+    depthMax = Math.max(depthMax, depth);
+    const children = (kids.get(id) || []).filter((c) => !pos.has(c.node_id) && c.node_id !== id).sort(order);
+    pos.set(id, null);  // mark visited, so a loop in the parents can't recurse forever
+    if (!children.length) { pos.set(id, { x: leaves++, depth }); return; }
+    for (const c of children) place(c.node_id, depth + 1);
+    const xs = children.map((c) => pos.get(c.node_id).x);
+    pos.set(id, { x: (xs[0] + xs[xs.length - 1]) / 2, depth });
+  };
+  place(0, 0);
+
+  const width = Math.max(320, Math.max(leaves, 1) * TOPO_COL + TOPO_PAD);
+  const height = depthMax * TOPO_ROW + TOPO_PAD * 2 + 20;
+  const at = (id) => {
+    const p = pos.get(id);
+    return { x: TOPO_PAD / 2 + (p.x + 0.5) * TOPO_COL, y: TOPO_PAD + p.depth * TOPO_ROW };
+  };
+
+  const svg = $("topo");
+  svg.replaceChildren();
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  svg.setAttribute("width", width);
+  svg.setAttribute("height", height);
+  // Shrink to fit the box, but never below 75% (text would get too small): past that, scroll.
+  svg.style.minWidth = `${Math.round(width * 0.75)}px`;
+  const edges = svgEl("g", {}, svg);
+  const marks = svgEl("g", {}, svg);
+
+  // The Pi
+  const pi = at(0);
+  const piG = svgEl("g", { transform: `translate(${pi.x},${pi.y})` }, marks);
+  svgEl("rect", { x: -24, y: -15, width: 48, height: 30, rx: 7, class: "t-pi" }, piG);
+  svgEl("text", { y: 5, class: "t-pi-text" }, piG).textContent = "Pi";
+  if (!kids.has(0)) svgEl("text", { y: 38, class: "t-sub" }, piG).textContent = "Waiting for nodes…";
+
+  for (const n of all) {
+    if (!pos.get(n.node_id) || n.node_id === 0) continue;
+    const id = n.node_id;
+    const { x, y } = at(id);
+    const from = at(n.parent);
+    // Lines leave below the parent's label so they never cross it; the Pi has no label below.
+    const parentNode = nodes.get(n.parent);
+    const fromY = from.y + (n.parent === 0 ? 15 : parentNode?.status === "dropped" ? 52 : 38);
+    const stale = n.status === "dropped";
+    const link = linkQuality(n.link);
+    const midY = (fromY + y) / 2;
+    const edge = svgEl("path", {
+      d: `M${from.x},${fromY} C${from.x},${midY} ${x},${midY} ${x},${y - 15}`,
+      class: `edge ${stale ? "edge-dropped" : `edge-${link.level}`}`,
+    }, edges);
+    svgEl("title", {}, edge).textContent = stale ? "Not responding" : `Signal ${link.text} dBm`;
+
+    const relay = isRelay(n);
+    const sos = openSos.has(id);
+    const classes = ["t-node", relay ? "relay" : "worker", stale && "dropped", sos && "sos",
+                     listening.has(id) && "listening"].filter(Boolean).join(" ");
+    const g = svgEl("g", { transform: `translate(${x},${y})`, class: classes }, marks);
+    if (!relay) {
+      g.dataset.node = id;
+      g.setAttribute("tabindex", "0");
+      g.setAttribute("role", "button");
+      g.setAttribute("aria-label", `${displayName(id)}: ${listening.has(id) ? "stop listening" : "listen"}`);
+    }
+    svgEl("rect", { x: -TOPO_COL / 2 + 2, y: -20, width: TOPO_COL - 4, height: 70, class: "t-hit" }, g);  // name is clickable too
+    if (relay) svgEl("rect", { x: -14, y: -14, width: 28, height: 28, rx: 5, class: "t-relay" }, g);
+    else svgEl("circle", { r: 14, class: "t-worker" }, g);
+    svgEl("text", { y: 4, class: relay ? "t-id-inv" : "t-id" }, g).textContent = id;
+    svgEl("text", { y: 31, class: "t-label" }, g).textContent = shortName(displayName(id));
+    const sub = sos ? "SOS" : stale ? "not responding" : listening.has(id) ? "listening" : "";
+    if (sub) svgEl("text", { y: 45, class: `t-sub ${sos ? "t-sub-sos" : ""}` }, g).textContent = sub;
+    const where = relay ? `connects to ${hopName(n.parent)}` : n.near ? `near ${displayName(n.near)}` : "";
+    svgEl("title", {}, g).textContent =
+      [displayName(id), relay ? `relay ${id}` : `node ${id}`, where, stale ? "not responding" : `${link.text} dBm`]
+        .filter(Boolean).join(" · ");
+  }
+
+  const wrap = svg.parentElement;
+  if (!topoCentered && wrap.clientWidth && kids.has(0)) {
+    const scale = svg.getBoundingClientRect().width / width;
+    wrap.scrollLeft = Math.max(0, pi.x * scale - wrap.clientWidth / 2);
+    topoCentered = true;
+  }
+
+  const unplaced = all.filter((n) => !pos.get(n.node_id));
+  const note = $("topo-unplaced");
+  note.hidden = !unplaced.length;
+  note.textContent = unplaced.length
+    ? `Not in the tree yet (their parent hasn't been heard): ${unplaced.map((n) => displayName(n.node_id)).join(", ")}`
+    : "";
+}
+
+function topoActivate(event) {
+  const target = event.target.closest("[data-node]");
+  if (target) toggleListen(Number(target.dataset.node));
+}
+$("topo").addEventListener("click", topoActivate);
+$("topo").addEventListener("keydown", (event) => {
+  if (event.key === "Enter" || event.key === " ") { event.preventDefault(); topoActivate(event); }
+});
 
 // ---- SOS banner ------------------------------------------------------------------
 // Every unacknowledged SOS stays pinned under the header on every dashboard until
@@ -380,8 +616,8 @@ $("sos-banner").addEventListener("click", (event) => {
   if (button) toggleListen(Number(button.dataset.node));
 });
 
-// One click handler each for the table and the waveform cards, so they survive updates.
-for (const container of [$("nodes"), $("waves")]) {
+// One click handler each for the tables and the waveform cards, so they survive updates.
+for (const container of [$("people"), $("relays"), $("waves")]) {
   container.addEventListener("click", (event) => {
     const rename = event.target.closest("button[data-rename]");
     if (rename) {
@@ -500,5 +736,6 @@ for (const type of ["pointerdown", "keydown"]) {
 }
 updateSoundButton();
 
+showTab();
 setInterval(scheduleRender, 250);  // keep "last seen" and the seconds counters fresh
 connect();

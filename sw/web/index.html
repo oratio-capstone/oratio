@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Oratio dashboard</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='7' fill='%230969da'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="styles.css">
   <script>
     // Apply the saved theme before the page draws, so it doesn't flash light first.
@@ -23,25 +24,64 @@
 
   <div id="sos-banner" role="alert" hidden></div>
 
+  <nav class="tabs" role="tablist" aria-label="Views">
+    <a href="#live" role="tab" id="tab-live" aria-controls="panel-live">Live</a>
+    <a href="#topology" role="tab" id="tab-topology" aria-controls="panel-topology">Topology</a>
+  </nav>
+
+  <!-- Shown on every tab, so a stream started from Topology stays in view. -->
   <section id="listening-section" hidden>
     <h2>Listening</h2>
     <div id="waves"></div>
   </section>
 
-  <section>
-    <h2>Nodes <span id="counts" class="muted"></span></h2>
-    <table>
-      <thead>
-        <tr><th>Person / node</th><th>Status</th><th title="Signal strength to the node's parent in the mesh (RSSI). Closer to 0 is stronger: above -67 good, -67 to -80 weak, below -80 poor.">Link (dBm)</th><th>Position (m)</th><th>Last seen</th><th>Audio</th></tr>
-      </thead>
-      <tbody id="nodes"><tr><td colspan="6" class="muted">Waiting for nodes…</td></tr></tbody>
-    </table>
-  </section>
+  <div id="panel-live" role="tabpanel" aria-labelledby="tab-live">
+    <section>
+      <h2>People <span id="people-count" class="muted"></span></h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Person</th><th>Status</th><th title="The fixed relay this person's device is connected through, so roughly where they are.">Near</th><th title="Signal strength to the device's parent in the mesh (RSSI). Closer to 0 is stronger: above -67 good, -67 to -80 weak, below -80 poor.">Link (dBm)</th><th>Last seen</th><th>Audio</th></tr>
+          </thead>
+          <tbody id="people"><tr class="empty"><td colspan="6" class="muted">Waiting for nodes…</td></tr></tbody>
+        </table>
+      </div>
+    </section>
 
-  <section>
-    <h2>Alerts</h2>
-    <ul id="alerts"><li class="muted">No alerts</li></ul>
-  </section>
+    <section>
+      <h2>Relays <span id="relay-count" class="muted"></span></h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Relay / place</th><th>Status</th><th title="The next hop towards the Pi.">Connects to</th><th title="Signal strength to the next hop towards the Pi (RSSI).">Link (dBm)</th><th title="People whose connection to the Pi currently runs through this relay.">Carrying</th></tr>
+          </thead>
+          <tbody id="relays"><tr class="empty"><td colspan="5" class="muted">No relays yet</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>Alerts</h2>
+      <ul id="alerts"><li class="muted">No alerts</li></ul>
+    </section>
+  </div>
+
+  <div id="panel-topology" role="tabpanel" aria-labelledby="tab-topology" hidden>
+    <section>
+      <h2>Mesh topology</h2>
+      <p class="muted topo-help">Who connects through whom, from the Pi down. Lines are coloured by signal strength. Click a person to listen.</p>
+      <div class="topo-wrap"><svg id="topo" role="img" aria-label="Mesh topology"></svg></div>
+      <ul class="legend">
+        <li><svg width="22" height="16" aria-hidden="true"><rect x="4" y="1" width="14" height="14" rx="3" class="t-relay"/></svg> Relay</li>
+        <li><svg width="22" height="16" aria-hidden="true"><circle cx="11" cy="8" r="7" class="t-worker"/></svg> Person</li>
+        <li><span class="swatch link-good-bg"></span> Good link</li>
+        <li><span class="swatch link-weak-bg"></span> Weak</li>
+        <li><span class="swatch link-poor-bg"></span> Poor</li>
+        <li><span class="swatch dashed"></span> Not responding</li>
+      </ul>
+      <p id="topo-unplaced" class="muted" hidden></p>
+    </section>
+  </div>
 
   <script src="app.js"></script>
 </body>

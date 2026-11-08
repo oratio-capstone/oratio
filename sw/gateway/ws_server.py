@@ -21,6 +21,11 @@ is open bumps "count" and "last_ts" on that alert instead of adding new ones.
 
 Node names (e.g. the person wearing the device) are shared by every dashboard and
 saved to a small JSON file, so they survive a gateway restart.
+
+Mesh tree: each node dict carries "role" ("worker" / "relay"), "level", and
+"parent" (the parent's node_id, 0 for the Pi itself, None while unknown), worked
+out by matching a node's parent MAC to another node's own MAC. "near" is the
+first relay above a worker, which is the closest thing we have to a location.
 """
 
 from __future__ import annotations
@@ -60,6 +65,9 @@ class _Client:
         self.listening: set[int] = set()
 
 
+GATEWAY = 0  # "parent" value for level-1 nodes: their parent is the Pi itself
+
+
 class WebSocketServer:
     def __init__(self, q_in: asyncio.Queue, q_out: asyncio.Queue, *, path: str = "/ws",
                  client_buffer: int = 128, alert_history: int = 50,
@@ -73,6 +81,11 @@ class WebSocketServer:
         # Unacknowledged SOS alerts by node. Kept apart from the history so an SOS can
         # never scroll out of view before someone has seen it.
         self.open_sos: dict[int, dict[str, Any]] = {}
+        self._by_mac: dict[str, int] = {}  # SoftAP MAC -> node_id, to resolve parents
+        # Recent paths to the Pi per node: [(since_ts, (parent, grandparent, ...)), ...].
+        # A relay is only declared dead after the heartbeat timeout, and by then the mesh may
+        # have rerouted its children, so the alert looks up who was behind it when last heard.
+        self._paths: dict[int, list[tuple[float, tuple[int, ...]]]] = {}
         self._next_alert_id = 1
         self._clients: set[_Client] = set()
         self._listeners: collections.Counter[int] = collections.Counter()
@@ -124,17 +137,23 @@ class WebSocketServer:
             self._mark_active(node, ts)
         elif kind == "heartbeat":
             node = self._node(node_id, ts)
-            if event.get("link") is not None:
-                node["link"] = event["link"]
-            if event.get("pos") is not None:
-                node["pos"] = event["pos"]
+            for field in ("link", "role", "level", "parent_mac", "mac"):
+                if event.get(field) is not None:
+                    node[field] = event[field]
+            if node["mac"]:
+                self._by_mac[node["mac"]] = node_id
+            self._resolve_tree(node)
+            self._record_path(node_id, ts)
             self._mark_active(node, ts)
         elif kind == "node_dropped":
             node = self.nodes.get(node_id)
             if node and node["status"] != "dropped":
                 node["status"] = "dropped"
                 self._broadcast({"type": "node_update", "node": node})
-                self._alert("node_dropped", node_id, ts, f"{self.label(node_id)} stopped responding")
+                if node["role"] == "relay":
+                    self._relay_dropped(node_id, ts)
+                else:
+                    self._alert("node_dropped", node_id, ts, f"{self.label(node_id)} stopped responding")
         elif kind == "sos":
             self._node(node_id, ts)
             open_alert = self.open_sos.get(node_id)
@@ -153,7 +172,8 @@ class WebSocketServer:
         node = self.nodes.get(node_id)
         if node is None:
             node = {"node_id": node_id, "name": self.names.get(node_id), "status": "new",
-                    "addr": None, "last_seen": ts, "link": None, "pos": None}
+                    "addr": None, "last_seen": ts, "link": None, "role": None, "level": None,
+                    "mac": None, "parent_mac": None, "parent": None, "near": None}
             self.nodes[node_id] = node
         return node
 
@@ -165,9 +185,66 @@ class WebSocketServer:
         self._broadcast({"type": "node_update", "node": node})
 
     def label(self, node_id: int) -> str:
-        """How a node is named in alerts: "Alex (node 3)", or "Node 3" without a name."""
+        """How a node is named in alerts: "Alex (node 3)", "Tunnel B (relay 2)", or "Node 3"."""
+        node = self.nodes.get(node_id)
+        kind = "relay" if node and node["role"] == "relay" else "node"
         name = self.names.get(node_id)
-        return f"{name} (node {node_id})" if name else f"Node {node_id}"
+        return f"{name} ({kind} {node_id})" if name else f"{kind.capitalize()} {node_id}"
+
+    # ---- mesh tree -----------------------------------------------------------
+
+    def _resolve_tree(self, node: dict[str, Any]) -> None:
+        """Fill in "parent" and "near" from the MACs. Runs on every heartbeat, so the
+        tree heals by itself within a second when a parent shows up late or a node moves."""
+        if node["level"] == 1:
+            node["parent"] = GATEWAY
+        elif node["parent_mac"]:
+            node["parent"] = self._by_mac.get(node["parent_mac"])
+        node["near"] = None
+        if node["role"] != "relay":
+            for ancestor in self.ancestors(node["node_id"]):
+                if self.nodes[ancestor]["role"] == "relay":
+                    node["near"] = ancestor
+                    break
+
+    def ancestors(self, node_id: int) -> list[int]:
+        """Node ids from this node's parent up to the root (excluding the Pi)."""
+        chain: list[int] = []
+        parent = self.nodes[node_id]["parent"] if node_id in self.nodes else None
+        while parent and parent in self.nodes and parent != node_id and parent not in chain:
+            chain.append(parent)
+            parent = self.nodes[parent]["parent"]
+        return chain
+
+    def _record_path(self, node_id: int, ts: float) -> None:
+        path = tuple(self.ancestors(node_id))
+        history = self._paths.setdefault(node_id, [])
+        if not history or history[-1][1] != path:
+            history.append((ts, path))
+            del history[:-4]  # a few recent changes are enough
+
+    def _path_at(self, node_id: int, ts: float) -> tuple[int, ...]:
+        """The node's path to the Pi as it was at time ts."""
+        path: tuple[int, ...] = ()
+        for since, p in self._paths.get(node_id, []):
+            if since <= ts:
+                path = p
+        return path
+
+    def _relay_dropped(self, relay_id: int, ts: float) -> None:
+        """A relay going down cuts off everyone behind it until the mesh reroutes, so
+        the alert says who was connected through it when it was last heard."""
+        # Just after its last heartbeat: covers people whose own heartbeat came a moment later,
+        # but is earlier than the mesh can reroute them (several seconds).
+        last_heard = self.nodes[relay_id]["last_seen"] + 1.0
+        behind = [n["node_id"] for n in sorted(self.nodes.values(), key=lambda n: n["node_id"])
+                  if n["role"] != "relay" and relay_id in self._path_at(n["node_id"], last_heard)]
+        if behind:
+            who = ", ".join(self.label(i) for i in behind)
+            message = f"{self.label(relay_id)} stopped responding. Connected through it: {who}"
+        else:
+            message = f"{self.label(relay_id)} stopped responding (nobody was connected through it)"
+        self._alert("relay_dropped", relay_id, ts, message, behind=behind)
 
     # ---- names ---------------------------------------------------------------
 

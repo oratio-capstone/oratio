@@ -6,7 +6,10 @@ import from here instead of writing dictionaries by hand.
 Q in  (UDP -> WebSocket)
     {"type": "node_joined",          "node_id": int, "addr": "ip:port", "ts": float}
     {"type": "node_address_changed", "node_id": int, "addr": "ip:port", "ts": float}
-    {"type": "heartbeat",            "node_id": int, "ts": float, "link": int|None, "pos": [x, y]|None}
+    {"type": "heartbeat",            "node_id": int, "ts": float, "link": int|None,
+                                      "role": "worker"|"relay"|None, "level": int|None,
+                                      "parent_mac": str|None, "mac": str|None}
+                                     (None = the heartbeat carried no telemetry; keep the last value)
     {"type": "node_dropped",         "node_id": int, "ts": float}
     {"type": "sos",                  "node_id": int, "ts": float}
     ("audio", node_id, pcm_bytes)    a tuple, kept light because it arrives 50 times a second per talker;
@@ -34,9 +37,11 @@ def node_address_changed(node_id: int, addr: str, ts: float | None = None) -> di
     return {"type": "node_address_changed", "node_id": node_id, "addr": addr, "ts": ts or time.time()}
 
 
-def heartbeat(node_id: int, link: int | None = None, pos: list[float] | None = None,
+def heartbeat(node_id: int, link: int | None = None, *, role: str | None = None,
+              level: int | None = None, parent_mac: str | None = None, mac: str | None = None,
               ts: float | None = None) -> dict[str, Any]:
-    return {"type": "heartbeat", "node_id": node_id, "link": link, "pos": pos, "ts": ts or time.time()}
+    return {"type": "heartbeat", "node_id": node_id, "link": link, "role": role, "level": level,
+            "parent_mac": parent_mac, "mac": mac, "ts": ts or time.time()}
 
 
 def node_dropped(node_id: int, ts: float | None = None) -> dict[str, Any]:

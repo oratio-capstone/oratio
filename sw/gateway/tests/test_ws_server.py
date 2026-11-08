@@ -42,12 +42,13 @@ async def test_heartbeat_is_pushed_live(gateway):
     _, q_in, _, url = gateway
     async with connect(url) as client:
         await recv_json(client)  # snapshot
-        await q_in.put(messages.heartbeat(2, link=-60, pos=[1.0, 2.0]))
+        await q_in.put(messages.heartbeat(2, link=-60, role="worker", level=1,
+                                          parent_mac="02:00:00:00:ff:ff", mac="02:00:00:00:00:02"))
         update = await recv_json(client)
     assert update["type"] == "node_update"
     assert update["node"]["node_id"] == 2
     assert update["node"]["link"] == -60
-    assert update["node"]["pos"] == [1.0, 2.0]
+    assert update["node"]["role"] == "worker" and update["node"]["parent"] == 0
 
 
 @pytest.mark.asyncio

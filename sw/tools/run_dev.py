@@ -27,7 +27,7 @@ from pathlib import Path
 
 SW = Path(__file__).resolve().parents[1]
 WEB_PORT = 8080
-DEFAULT_SIM_ARGS = ["--talkers", "1", "--drop", "3:10", "--sos", "5:15"]
+DEFAULT_SIM_ARGS = ["--talkers", "1", "--drop", "3:10", "--sos", "5:15", "--drop", "102:25"]
 COLORS = {"gateway": "\033[36m", "web": "\033[35m", "sim": "\033[33m"}
 RESET = "\033[0m"
 

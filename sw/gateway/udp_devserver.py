@@ -56,9 +56,11 @@ class UdpDevServer:
         self.dropped.discard(node_id)
 
         if packet.type == protocol.TYPE_HEARTBEAT:
-            telemetry = protocol.parse_heartbeat(packet.payload)
-            link, pos = (telemetry[0], [telemetry[1], telemetry[2]]) if telemetry else (None, None)
-            messages.put_nowait_drop_oldest(self.q_in, messages.heartbeat(node_id, link, pos, now))
+            hb = protocol.parse_heartbeat(packet.payload)
+            event = (messages.heartbeat(node_id, hb.rssi, role=hb.role, level=hb.level,
+                                        parent_mac=hb.parent_mac, mac=hb.mac, ts=now)
+                     if hb else messages.heartbeat(node_id, ts=now))
+            messages.put_nowait_drop_oldest(self.q_in, event)
         elif packet.type == protocol.TYPE_SOS:
             messages.put_nowait_drop_oldest(self.q_in, messages.sos(node_id, now))
         elif packet.type == protocol.TYPE_AUDIO and node_id in self.listening:
