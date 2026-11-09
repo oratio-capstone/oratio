@@ -3987,10 +3987,9 @@
 		(on_board yes)
 		(in_pos_files yes)
 		(dnp no)
-		(fields_autoplaced yes)
 		(uuid "677c807e-f758-46ce-b664-f1a8bf13161e")
 		(property "Reference" "C1"
-			(at 356.235 60.96 90)
+			(at 356.87 62.23 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -4000,7 +3999,7 @@
 			)
 		)
 		(property "Value" "100uF"
-			(at 356.235 63.5 90)
+			(at 356.87 64.516 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
