@@ -11,6 +11,10 @@ pr:
 pool:
   vmImage: 'ubuntu-latest'
 
+variables:
+  # Keep PlatformIO's downloads in a folder the cache can save and restore.
+  PLATFORMIO_CORE_DIR: $(Pipeline.Workspace)/.platformio
+
 steps:
 # Pinned: '3.x' now resolves to Python 3.15 on ubuntu-latest, and the
 # espressif32 platform only supports Python 3.10-3.14.
@@ -25,10 +29,20 @@ steps:
     pip install "platformio==6.1.19"
   displayName: 'Install PlatformIO (pinned)'
 
+# Reuses the downloaded ESP-IDF between runs. The key includes platformio.ini,
+# so changing the platform version starts a fresh cache automatically.
+- task: Cache@2
+  inputs:
+    key: 'platformio | "$(Agent.OS)" | fw/platformio.ini'
+    path: $(PLATFORMIO_CORE_DIR)
+  displayName: 'Cache PlatformIO toolchain'
+
+# Retries cover GitHub download timeouts (HTTP 504) while installing the toolchain.
 - script: |
     pio run -e esp32-c3-devkitm-1
   displayName: 'Build ESP32-C3'
   workingDirectory: '$(Build.SourcesDirectory)/fw'
+  retryCountOnTaskFailure: 2
 
 # Once you have tests under fw/test/, add:
 # - script: |
