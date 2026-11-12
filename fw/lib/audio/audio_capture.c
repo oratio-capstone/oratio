@@ -8,16 +8,9 @@
 #include "esp_log.h"
 #include "freertos/task.h"
 
-// Push-to-talk button: one leg to this GPIO, the other to GND. Internal pull-up, so pressed reads 0.
-#if CONFIG_IDF_TARGET_ESP32S3
-#define AUDIO_CAPTURE_PTT_GPIO GPIO_NUM_21 // PCB pin map
-#else
-#define AUDIO_CAPTURE_PTT_GPIO GPIO_NUM_10
-#endif
-
 static const char *TAG = "AUDIO_CAPTURE";
 
-static const uint32_t SUMMARY_EVERY_FRAMES = 100; // one log line every 2 s (50 frames/s)
+static const uint32_t SUMMARY_PERIOD_MS = 2000; // style guide: rolling summary every 1-2 s
 static const uint32_t TASK_STACK_BYTES = 4096;
 static const UBaseType_t TASK_PRIORITY = 5;
 static const BaseType_t TASK_CORE = (portNUM_PROCESSORS > 1) ? 1 : 0; // core 1 on the S3; the C3 only has core 0
@@ -142,49 +135,55 @@ static void capture_task(void *arg)
 {
     (void)arg;
     uint16_t sequence = 0;
-    uint32_t frames = 0;
+    uint32_t sent = 0;
     uint32_t dropped = 0;
     uint32_t errors = 0;
     bool was_talking = false;
+    TickType_t last_summary = xTaskGetTickCount();
 
     while (true)
     {
         // 1. Read one 20 ms frame (blocks until it has arrived). Always read, even with the button up,
         //    so the I2S buffers never fill with old audio.
-        if (audio_capture_read(s_frame.samples, AUDIO_SAMPLES_PER_FRAME) != ESP_OK)
-        {
-            errors++;
-            vTaskDelay(1); // don't spin if the driver keeps failing
-            continue;
-        }
+        const esp_err_t err = audio_capture_read(s_frame.samples, AUDIO_SAMPLES_PER_FRAME);
 
-        // Push-to-talk: only send audio while the button is held down.
+        // Push-to-talk: only send audio while the button is held down (pressed reads 0).
         const bool talking = (gpio_get_level(AUDIO_CAPTURE_PTT_GPIO) == 0);
         if (talking != was_talking)
         {
             ESP_LOGI(TAG, "PTT %s", talking ? "down: sending audio" : "up: muted");
             was_talking = talking;
         }
-        if (!talking)
+
+        if (err != ESP_OK)
         {
-            continue;
+            errors++;
+            vTaskDelay(1); // don't spin if the driver keeps failing
+        }
+        else if (talking)
+        {
+            // 2. Number the frame. The sequence advances every sent frame, even if it gets dropped.
+            s_frame.sequence = sequence++;
+            s_frame.length = AUDIO_SAMPLES_PER_FRAME;
+
+            // 3. Hand it to the network task without waiting. If the buffer is full, drop and count it.
+            if (xMessageBufferSend(s_output, &s_frame, sizeof(s_frame), 0) == sizeof(s_frame))
+            {
+                sent++;
+            }
+            else
+            {
+                dropped++;
+            }
         }
 
-        // 2. Number the frame. The sequence advances every frame, even if it gets dropped.
-        s_frame.sequence = sequence++;
-        s_frame.length = AUDIO_SAMPLES_PER_FRAME;
-
-        // 3. Hand it to the network task without waiting. If the buffer is full, drop and count it.
-        if (xMessageBufferSend(s_output, &s_frame, sizeof(s_frame), 0) != sizeof(s_frame))
+        // Summary on a timer, so read errors show even while the button is up.
+        const TickType_t now = xTaskGetTickCount();
+        if (now - last_summary >= pdMS_TO_TICKS(SUMMARY_PERIOD_MS))
         {
-            dropped++;
-        }
-
-        frames++;
-        if (frames % SUMMARY_EVERY_FRAMES == 0)
-        {
-            ESP_LOGI(TAG, "frames=%lu dropped=%lu errors=%lu", (unsigned long)frames, (unsigned long)dropped,
-                     (unsigned long)errors);
+            ESP_LOGI(TAG, "sent=%lu dropped=%lu errors=%lu ptt=%s", (unsigned long)sent, (unsigned long)dropped,
+                     (unsigned long)errors, talking ? "down" : "up");
+            last_summary = now;
         }
     }
 }
