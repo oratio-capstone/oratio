@@ -1,3 +1,12 @@
 dependencies:
   espressif/mesh_lite:
     version: "1.0.2"
+  # Explicit IoT Bridge 1.0.1 dependencies for USB-capable S2/S3 targets.
+  espressif/esp_modem_usb_dte:
+    version: "1.*"
+    rules:
+      - if: "target in [esp32s2, esp32s3]"
+  espressif/esp_tinyusb:
+    version: "1.*"
+    rules:
+      - if: "target in [esp32s2, esp32s3]"
