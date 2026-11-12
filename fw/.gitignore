@@ -4,7 +4,7 @@
 .ccls
 compile_commands.json
 .cache/clangd/
-sdkconfig.audio_test
-sdkconfig.audio_test.old
-sdkconfig.audio_test_s3*
-sdkconfig.esp32-s3-n8r8*
+sdkconfig.*
+!sdkconfig.defaults*
+!sdkconfig.*.defaults
+.vscode/
