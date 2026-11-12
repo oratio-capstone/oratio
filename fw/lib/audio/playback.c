@@ -13,19 +13,13 @@ static TaskHandle_t s_task;
 static void playback_task(void *argument)
 {
     MessageBufferHandle_t input = (MessageBufferHandle_t)argument;
-    audio_frame_t frame;
+    static audio_frame_t frame;
     uint32_t errors = 0;
     TickType_t last_log = xTaskGetTickCount();
     while (true)
     {
         const size_t received = xMessageBufferReceive(input, &frame, sizeof(frame), portMAX_DELAY);
-        if (received == 0)
-        {
-            // An oversized message remains queued; stop rather than spin on it.
-            ESP_LOGE(TAG, "Message exceeds audio_frame_t; fix producer and reboot");
-            vTaskSuspend(NULL);
-            continue;
-        }
+        configASSERT(received != 0); // Producer must send messages that fit audio_frame_t.
         // Messages contain the whole struct; length counts valid samples, not bytes.
         // Sequence is intentionally unused until packet reordering is introduced.
         if (received != sizeof(frame) || frame.length == 0 || frame.length > AUDIO_SAMPLES_PER_FRAME)
