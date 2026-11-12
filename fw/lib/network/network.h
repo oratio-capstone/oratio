@@ -8,6 +8,9 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/message_buffer.h"
 
+/* Call storage_init() successfully from application startup before this function.
+ * Networking consumes persistent settings but does not own storage initialization.
+ */
 esp_err_t mesh_network_init(void);
 void mesh_network_log_status(void);
 /* Future mesh-status LED input: true after the station gets an IPv4 address;
@@ -34,6 +37,15 @@ typedef enum
 #define ORATIO_HEADER_SIZE 7
 #define ORATIO_MAX_PAYLOAD_SIZE 640
 
+/* Heartbeat payload[0]: signed int8 RSSI in dBm, or 127 when unavailable.
+ * An empty legacy heartbeat is still accepted. Root measures hotspot; nodes parent.
+ */
+enum
+{
+    ORATIO_HEARTBEAT_PAYLOAD_SIZE = 1,
+    ORATIO_RSSI_UNAVAILABLE = 127
+};
+
 typedef struct
 {
     uint8_t type;
@@ -50,7 +62,8 @@ esp_err_t oratio_packet_encode(const oratio_packet_t *packet, uint8_t *buffer, s
 esp_err_t oratio_packet_decode(const uint8_t *buffer, size_t received_length, oratio_packet_t *packet);
 
 /* Direct audio codecs: no intermediate oratio_packet_t payload copy.
- * The producer's sequence is preserved. Only length bytes of samples are used.
+ * The producer's sequence is preserved. frame->length counts valid int16_t samples.
+ * Codecs convert between sample counts in audio frames and byte counts on the wire.
  * Sample bytes retain their ESP32 native little-endian representation.
  */
 esp_err_t network_audio_frame_encode(const audio_frame_t *frame, uint16_t node_id, uint8_t *buffer, size_t capacity,
@@ -58,7 +71,8 @@ esp_err_t network_audio_frame_encode(const audio_frame_t *frame, uint16_t node_i
 
 esp_err_t network_audio_frame_decode(const uint8_t *buffer, size_t received_length, audio_frame_t *frame);
 
-_Static_assert(AUDIO_FRAME_BYTES == ORATIO_MAX_PAYLOAD_SIZE, "Audio and network payload sizes differ");
+_Static_assert(sizeof(((audio_frame_t *)0)->samples) == ORATIO_MAX_PAYLOAD_SIZE,
+               "Audio and network payload sizes differ");
 
 /* Four complete records, including FreeRTOS's length prefix for each message.
  * xMessageBufferCreate() adds its internal ring-buffer sentinel byte.

@@ -16,7 +16,6 @@
 #endif
 
 #include "network.h"
-#include "storage.h"
 #include <stdbool.h>
 #include <stdatomic.h>
 #include <stdint.h>
@@ -61,7 +60,10 @@ static const uint32_t HEARTBEAT_INTERVAL_MS = 1000;
 static const uint32_t SOCKET_RETRY_MS = 1000;
 static const uint32_t METRICS_INTERVAL_MS = 2000;
 static const uint16_t ORATIO_UDP_PORT = 8989;
-static const BaseType_t NETWORK_TASK_CORE = 1;
+/* Keep networking on core 0; core 1 is reserved for audio on dual-core boards.
+ * Core 0 is also valid on the single-core ESP32-C3.
+ */
+static const BaseType_t NETWORK_TASK_CORE = 0;
 static const char ORATIO_SERVER_IP[] = "192.168.137.1";
 
 static const char *TAG = "MESH_NETWORK";
@@ -236,8 +238,6 @@ esp_err_t mesh_network_init(void)
     /* Enable the already compiled-in DEBUG calls for this tag only. */
     esp_log_level_set(TAG, ESP_LOG_DEBUG);
 #endif
-    ESP_RETURN_ON_ERROR(storage_init(), TAG, "Storage initialization failed");
-
     ESP_RETURN_ON_ERROR(esp_netif_init(), TAG, "Network interface initialization failed");
 
     /* The default event loop delivers Wi-Fi and IP events to registered handlers. */
@@ -336,6 +336,21 @@ void mesh_network_log_status(void)
 /* 3. Packet encoding and decoding                                             */
 /* ========================================================================== */
 
+/* Call only after checking the output capacity and packet fields.
+ * All encoders use the same seven-byte, big-endian header layout.
+ */
+static void network_write_packet_header(
+    uint8_t *buffer, uint8_t type, uint16_t node_id, uint16_t sequence, uint16_t length)
+{
+    buffer[0] = type;
+    buffer[1] = (uint8_t)(node_id >> 8);
+    buffer[2] = (uint8_t)node_id;
+    buffer[3] = (uint8_t)(sequence >> 8);
+    buffer[4] = (uint8_t)sequence;
+    buffer[5] = (uint8_t)(length >> 8);
+    buffer[6] = (uint8_t)length;
+}
+
 esp_err_t oratio_packet_encode(const oratio_packet_t *packet, uint8_t *buffer, size_t buffer_capacity,
                                size_t *encoded_length)
 {
@@ -363,9 +378,9 @@ esp_err_t oratio_packet_encode(const oratio_packet_t *packet, uint8_t *buffer, s
         ESP_LOGD(TAG, "Packet length exceeds maximum: %u", (unsigned int)packet->length);
         return ESP_ERR_INVALID_ARG;
     }
-    else if (packet->type == ORATIO_PACKET_HEARTBEAT && packet->length != 0)
+    else if (packet->type == ORATIO_PACKET_HEARTBEAT && packet->length > ORATIO_HEARTBEAT_PAYLOAD_SIZE)
     {
-        ESP_LOGD(TAG, "Heartbeat packet must have zero payload length");
+        ESP_LOGD(TAG, "Heartbeat payload must be empty or contain one RSSI byte");
         return ESP_ERR_INVALID_ARG;
     }
     else if (buffer_capacity < ORATIO_HEADER_SIZE + packet->length)
@@ -374,66 +389,10 @@ esp_err_t oratio_packet_encode(const oratio_packet_t *packet, uint8_t *buffer, s
         return ESP_ERR_INVALID_SIZE;
     }
 
-    buffer[0] = packet->type;
-    buffer[1] = (uint8_t)(packet->node_id >> 8);
-    buffer[2] = (uint8_t)(packet->node_id & 0xFF);
-    buffer[3] = (uint8_t)(packet->sequence >> 8);
-    buffer[4] = (uint8_t)(packet->sequence & 0xFF);
-    buffer[5] = (uint8_t)(packet->length >> 8);
-    buffer[6] = (uint8_t)(packet->length & 0xFF);
+    network_write_packet_header(buffer, packet->type, packet->node_id, packet->sequence, packet->length);
 
     memcpy(buffer + ORATIO_HEADER_SIZE, packet->payload, packet->length);
     *encoded_length = ORATIO_HEADER_SIZE + packet->length;
-    return ESP_OK;
-}
-
-esp_err_t oratio_packet_decode(const uint8_t *buffer, size_t received_length, oratio_packet_t *packet)
-{
-    /* Check the input storage before reading any header bytes. */
-    if (buffer == NULL || packet == NULL)
-    {
-        ESP_LOGD(TAG, "Null pointer argument(s) to oratio_packet_decode");
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    if (received_length < ORATIO_HEADER_SIZE)
-    {
-        ESP_LOGD(TAG, "Received length is insufficient for packet header");
-        return ESP_ERR_INVALID_SIZE;
-    }
-
-    packet->type = buffer[0];
-    packet->node_id = ((uint16_t)buffer[1] << 8) | (uint16_t)buffer[2];
-    packet->sequence = ((uint16_t)buffer[3] << 8) | (uint16_t)buffer[4];
-    packet->length = ((uint16_t)buffer[5] << 8) | (uint16_t)buffer[6];
-
-    /* Only validate header fields after decoding their received values. */
-    if (packet->type != ORATIO_PACKET_AUDIO && packet->type != ORATIO_PACKET_TELEMETRY &&
-        packet->type != ORATIO_PACKET_HEARTBEAT)
-    {
-        ESP_LOGD(TAG, "Invalid packet type: %u", (unsigned int)packet->type);
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    if (packet->length > ORATIO_MAX_PAYLOAD_SIZE)
-    {
-        ESP_LOGD(TAG, "Decoded payload exceeds maximum: %u", (unsigned int)packet->length);
-        return ESP_ERR_INVALID_SIZE;
-    }
-
-    if (packet->type == ORATIO_PACKET_HEARTBEAT && packet->length != 0)
-    {
-        ESP_LOGD(TAG, "Heartbeat packet must have zero payload length");
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    if (received_length != ORATIO_HEADER_SIZE + packet->length)
-    {
-        ESP_LOGD(TAG, "Received length does not match declared payload length");
-        return ESP_ERR_INVALID_SIZE;
-    }
-
-    memcpy(packet->payload, buffer + ORATIO_HEADER_SIZE, packet->length);
     return ESP_OK;
 }
 
@@ -446,6 +405,9 @@ typedef struct
     uint16_t length;
 } network_packet_header_t;
 
+/* Shared by both decoders and incoming packet dispatch. Validate size before
+ * reading fields, then reject invalid types, payload sizes, and trailing bytes.
+ */
 static esp_err_t network_read_packet_header(const uint8_t *buffer, size_t received_length,
                                             network_packet_header_t *header)
 {
@@ -470,7 +432,7 @@ static esp_err_t network_read_packet_header(const uint8_t *buffer, size_t receiv
     {
         return ESP_ERR_INVALID_SIZE;
     }
-    if (header->type == ORATIO_PACKET_HEARTBEAT && header->length != 0)
+    if (header->type == ORATIO_PACKET_HEARTBEAT && header->length > ORATIO_HEARTBEAT_PAYLOAD_SIZE)
     {
         return ESP_ERR_INVALID_ARG;
     }
@@ -478,6 +440,31 @@ static esp_err_t network_read_packet_header(const uint8_t *buffer, size_t receiv
     {
         return ESP_ERR_INVALID_SIZE;
     }
+    return ESP_OK;
+}
+
+/* Decode and validate the header once, then copy directly into the caller's packet.
+ * Do not change output fields until the complete received packet is valid.
+ */
+esp_err_t oratio_packet_decode(const uint8_t *buffer, size_t received_length, oratio_packet_t *packet)
+{
+    if (packet == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    network_packet_header_t header;
+    esp_err_t result = network_read_packet_header(buffer, received_length, &header);
+    if (result != ESP_OK)
+    {
+        return result;
+    }
+
+    packet->type = header.type;
+    packet->node_id = header.node_id;
+    packet->sequence = header.sequence;
+    packet->length = header.length;
+    memcpy(packet->payload, buffer + ORATIO_HEADER_SIZE, header.length);
     return ESP_OK;
 }
 
@@ -492,23 +479,20 @@ esp_err_t network_audio_frame_encode(const audio_frame_t *frame, uint16_t node_i
     {
         return ESP_ERR_INVALID_ARG;
     }
-    if (frame->length > AUDIO_FRAME_BYTES || frame->length % sizeof(int16_t) != 0)
+    if (frame->length > AUDIO_SAMPLES_PER_FRAME)
     {
         return ESP_ERR_INVALID_SIZE;
     }
-    if (capacity < ORATIO_HEADER_SIZE + frame->length)
+
+    /* Capture/playback count samples; the packet header and memcpy count bytes. */
+    const size_t payload_bytes = (size_t)frame->length * sizeof(int16_t);
+    if (capacity < ORATIO_HEADER_SIZE + payload_bytes)
     {
         return ESP_ERR_INVALID_SIZE;
     }
-    buffer[0] = ORATIO_PACKET_AUDIO;
-    buffer[1] = (uint8_t)(node_id >> 8);
-    buffer[2] = (uint8_t)node_id;
-    buffer[3] = (uint8_t)(frame->sequence >> 8);
-    buffer[4] = (uint8_t)frame->sequence;
-    buffer[5] = (uint8_t)(frame->length >> 8);
-    buffer[6] = (uint8_t)frame->length;
-    memcpy(buffer + ORATIO_HEADER_SIZE, frame->samples, frame->length);
-    *encoded_length = ORATIO_HEADER_SIZE + frame->length;
+    network_write_packet_header(buffer, ORATIO_PACKET_AUDIO, node_id, frame->sequence, (uint16_t)payload_bytes);
+    memcpy(buffer + ORATIO_HEADER_SIZE, frame->samples, payload_bytes);
+    *encoded_length = ORATIO_HEADER_SIZE + payload_bytes;
     return ESP_OK;
 }
 
@@ -533,7 +517,8 @@ esp_err_t network_audio_frame_decode(const uint8_t *buffer, size_t received_leng
         return ESP_ERR_INVALID_SIZE;
     }
     frame->sequence = header.sequence;
-    frame->length = header.length;
+    /* Header validation already bounded the byte count and rejected partial samples. */
+    frame->length = (uint16_t)(header.length / sizeof(int16_t));
     memcpy(frame->samples, buffer + ORATIO_HEADER_SIZE, header.length);
     return ESP_OK;
 }
@@ -715,12 +700,17 @@ static esp_err_t network_process_heartbeat(network_context_t *context)
         return ESP_OK;
     }
 
-    uint8_t heartbeat[ORATIO_HEADER_SIZE] = {0};
-    heartbeat[0] = ORATIO_PACKET_HEARTBEAT;
-    heartbeat[1] = (uint8_t)(context->node_id >> 8);
-    heartbeat[2] = (uint8_t)context->node_id;
-    heartbeat[3] = (uint8_t)(context->heartbeat_sequence >> 8);
-    heartbeat[4] = (uint8_t)context->heartbeat_sequence;
+    /* Snapshot the direct upstream link; never reuse an RSSI from an old parent. */
+    wifi_ap_record_t upstream = {0};
+    int8_t rssi = ORATIO_RSSI_UNAVAILABLE;
+    if (esp_wifi_sta_get_ap_info(&upstream) == ESP_OK)
+    {
+        rssi = upstream.rssi;
+    }
+    uint8_t heartbeat[ORATIO_HEADER_SIZE + ORATIO_HEARTBEAT_PAYLOAD_SIZE] = {0};
+    network_write_packet_header(heartbeat, ORATIO_PACKET_HEARTBEAT, context->node_id,
+                                context->heartbeat_sequence, ORATIO_HEARTBEAT_PAYLOAD_SIZE);
+    heartbeat[ORATIO_HEADER_SIZE] = (uint8_t)rssi;
 
     uint16_t sent_sequence = context->heartbeat_sequence;
     esp_err_t result = network_socket_send(context, heartbeat, sizeof(heartbeat));
@@ -730,7 +720,8 @@ static esp_err_t network_process_heartbeat(network_context_t *context)
     }
 
     context->heartbeat_sequence++;
-    ESP_LOGD(TAG, "Heartbeat sent, sequence: %u", (unsigned int)sent_sequence);
+    ESP_LOGD(TAG, "Heartbeat sent, sequence: %u upstream RSSI=%d (127=unavailable)",
+             (unsigned int)sent_sequence, (int)rssi);
 #if ORATIO_NETWORK_DEBUG
     mesh_network_log_status();
 #endif
@@ -798,8 +789,13 @@ static esp_err_t network_process_receive(network_context_t *context)
     }
     if (header.type == ORATIO_PACKET_HEARTBEAT)
     {
-        ESP_LOGD(TAG, "Heartbeat received: node=%04x sequence=%u", (unsigned int)header.node_id,
-                 (unsigned int)header.sequence);
+        int8_t rssi = ORATIO_RSSI_UNAVAILABLE;
+        if (header.length == ORATIO_HEARTBEAT_PAYLOAD_SIZE)
+        {
+            rssi = (int8_t)receive_buffer[ORATIO_HEADER_SIZE];
+        }
+        ESP_LOGD(TAG, "Heartbeat received: node=%04x sequence=%u upstream RSSI=%d (127=unavailable)",
+                 (unsigned int)header.node_id, (unsigned int)header.sequence, (int)rssi);
         return ESP_OK;
     }
     if (header.type != ORATIO_PACKET_AUDIO)

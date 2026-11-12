@@ -1,5 +1,5 @@
-# Board flash
-CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+# Flash size is selected by target-specific defaults, not shared across boards.
+# sdkconfig.defaults.esp32c3: 4 MB; sdkconfig.defaults.esp32s3: 8 MB.
 
 # IP forwarding and NAT
 CONFIG_LWIP_IP_FORWARD=y

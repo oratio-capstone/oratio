@@ -21,3 +21,46 @@ The system comprises of wearable nodes participating in a wireless mesh, a Raspb
 | ESP-IDF | 5.4.2 |
 | ESP-Mesh-Lite | 1.0.2 |
 | IoT-Bridge | 1.0.1 |
+
+## Local firmware builds
+
+Use PlatformIO Core 6.1.19 to match CI. From the repository root in PowerShell:
+
+```powershell
+python -m venv fw/.venv-pio
+& fw/.venv-pio/Scripts/python.exe -m pip install platformio==6.1.19
+& fw/.venv-pio/Scripts/Activate.ps1
+pio --version
+cd fw
+```
+
+If the virtual environment already exists, reuse it and install the pinned version
+there. PlatformIO downloads its platform/tool packages automatically into the normal
+user .platformio directory. That directory does not select the pio executable version.
+Generated sdkconfig files and the virtual environment are local, ignored build state.
+
+Build the S3 root firmware and C3 CI target:
+
+```powershell
+pio run -e root -e esp32-c3-devkitm-1
+```
+
+Build and link a test suite without uploading or running it:
+
+```powershell
+pio test -e root_test -f test_155_protocol --without-uploading --without-testing
+```
+
+The same build-only command supports test_102_mesh, test_106_udp,
+test_109_heartbeat, and test_113_relay. Hardware tests require the appropriate board,
+serial port, network settings, and gateway setup. Successful build-only checks are
+not hardware test passes.
+
+### Board-specific flash defaults
+
+Shared network settings live in fw/sdkconfig.defaults. ESP-IDF automatically adds
+fw/sdkconfig.defaults.esp32c3 for C3 targets (4 MB flash) or
+fw/sdkconfig.defaults.esp32s3 for S3 targets (8 MB flash). These small defaults files
+belong in version control; generated per-environment sdkconfig files do not.
+Existing generated configurations retain their saved settings, so check/regenerate
+local configuration when changing board assumptions; preserve any local credentials.

@@ -31,6 +31,45 @@ static void test_encode_heartbeat(void)
     TEST_ASSERT_EQUAL_UINT8_ARRAY(expected, buffer, sizeof(expected));
 }
 
+/* Known wire bytes verify that negative RSSI remains a signed one-byte value. */
+static void test_encode_heartbeat_rssi(void)
+{
+    oratio_packet_t packet = {
+        .type = ORATIO_PACKET_HEARTBEAT, .node_id = 0x1234, .sequence = 0x0102,
+        .length = ORATIO_HEARTBEAT_PAYLOAD_SIZE, .payload = {0xE9}};
+    uint8_t buffer[ORATIO_HEADER_SIZE + ORATIO_HEARTBEAT_PAYLOAD_SIZE] = {0};
+    const uint8_t expected[] = {'H', 0x12, 0x34, 0x01, 0x02, 0, 1, 0xE9};
+    size_t length = 0;
+    TEST_ASSERT_EQUAL(ESP_OK, oratio_packet_encode(&packet, buffer, sizeof(buffer), &length));
+    TEST_ASSERT_EQUAL_UINT32(sizeof(expected), length);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(expected, buffer, sizeof(expected));
+}
+
+static void test_decode_heartbeat_rssi(void)
+{
+    const uint8_t buffer[] = {'H', 0x12, 0x34, 0x01, 0x02, 0, 1, 0xE9};
+    oratio_packet_t packet = {0};
+    TEST_ASSERT_EQUAL(ESP_OK, oratio_packet_decode(buffer, sizeof(buffer), &packet));
+    TEST_ASSERT_EQUAL(ORATIO_PACKET_HEARTBEAT, packet.type);
+    TEST_ASSERT_EQUAL_HEX16(0x1234, packet.node_id);
+    TEST_ASSERT_EQUAL_HEX16(0x0102, packet.sequence);
+    TEST_ASSERT_EQUAL_UINT16(1, packet.length);
+    TEST_ASSERT_EQUAL_INT8(-23, (int8_t)packet.payload[0]);
+}
+
+static void test_heartbeat_rssi_unavailable(void)
+{
+    const uint8_t buffer[] = {'H', 0, 1, 0, 2, 0, 1, 0x7F};
+    oratio_packet_t packet = {0};
+    TEST_ASSERT_EQUAL(ESP_OK, oratio_packet_decode(buffer, sizeof(buffer), &packet));
+    TEST_ASSERT_EQUAL_INT8(ORATIO_RSSI_UNAVAILABLE, (int8_t)packet.payload[0]);
+    uint8_t encoded[sizeof(buffer)] = {0};
+    size_t length = 0;
+    TEST_ASSERT_EQUAL(ESP_OK, oratio_packet_encode(&packet, encoded, sizeof(encoded), &length));
+    TEST_ASSERT_EQUAL_UINT32(sizeof(buffer), length);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(buffer, encoded, sizeof(buffer));
+}
+
 static void test_decode_heartbeat(void)
 {
     const uint8_t buffer[] = {'H', 0x12, 0x34, 0x01, 0x02, 0x00, 0x00};
@@ -103,9 +142,9 @@ static void test_decode_invalid_length(void)
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_SIZE, result);
 }
 
-static void test_decode_heartbeat_with_payload(void)
+static void test_decode_heartbeat_with_invalid_payload_size(void)
 {
-    const uint8_t buffer[] = {'H', 0x12, 0x34, 0x01, 0x02, 0x00, 0x01, 0x00};
+    const uint8_t buffer[] = {'H', 0x12, 0x34, 0x01, 0x02, 0x00, 0x02, 0xE9, 0x00};
 
     oratio_packet_t packet = {0};
 
@@ -142,10 +181,10 @@ static void test_encode_oversized_payload(void)
     TEST_ASSERT_EQUAL_UINT32(0, length);
 }
 
-static void test_encode_heartbeat_with_payload(void)
+static void test_encode_heartbeat_with_invalid_payload_size(void)
 {
-    oratio_packet_t packet = {.type = ORATIO_PACKET_HEARTBEAT, .length = 1};
-    uint8_t buffer[ORATIO_HEADER_SIZE + 1];
+    oratio_packet_t packet = {.type = ORATIO_PACKET_HEARTBEAT, .length = 2};
+    uint8_t buffer[ORATIO_HEADER_SIZE + 2];
     size_t length = 123;
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, oratio_packet_encode(&packet, buffer, sizeof(buffer), &length));
     TEST_ASSERT_EQUAL_UINT32(0, length);
@@ -281,7 +320,7 @@ static void test_zero_header_values_and_empty_payloads(void)
  */
 static void test_encode_capture_audio_frame(void)
 {
-    audio_frame_t frame = {.sequence = 0xBEEF, .length = 4};
+    audio_frame_t frame = {.sequence = 0xBEEF, .length = 2};
     frame.samples[0] = 0x1234;
     frame.samples[1] = -2;
     uint8_t buffer[ORATIO_HEADER_SIZE + 4];
@@ -299,14 +338,31 @@ static void test_decode_playback_audio_frame(void)
     audio_frame_t frame = {0};
     TEST_ASSERT_EQUAL(ESP_OK, network_audio_frame_decode(buffer, sizeof(buffer), &frame));
     TEST_ASSERT_EQUAL_HEX16(0xBEEF, frame.sequence);
-    TEST_ASSERT_EQUAL_UINT16(4, frame.length);
+    TEST_ASSERT_EQUAL_UINT16(2, frame.length);
     TEST_ASSERT_EQUAL_INT16(0x1234, frame.samples[0]);
     TEST_ASSERT_EQUAL_INT16(-2, frame.samples[1]);
 }
 
+/* Odd sample counts are valid: three complete samples produce six wire bytes. */
+static void test_audio_frame_three_samples(void)
+{
+    audio_frame_t input = {.sequence = 7, .length = 3, .samples = {0x1234, -2, 0x4567}};
+    audio_frame_t output = {0};
+    const uint8_t expected[] = {'A', 0x12, 0x34, 0, 7, 0, 6, 0x34, 0x12, 0xFE, 0xFF, 0x67, 0x45};
+    uint8_t buffer[sizeof(expected)] = {0};
+    size_t length = 0;
+    TEST_ASSERT_EQUAL(ESP_OK, network_audio_frame_encode(&input, 0x1234, buffer, sizeof(buffer), &length));
+    TEST_ASSERT_EQUAL_UINT32(sizeof(expected), length);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(expected, buffer, sizeof(expected));
+    TEST_ASSERT_EQUAL(ESP_OK, network_audio_frame_decode(expected, sizeof(expected), &output));
+    TEST_ASSERT_EQUAL_UINT16(3, output.length);
+    TEST_ASSERT_EQUAL_UINT16(7, output.sequence);
+    TEST_ASSERT_EQUAL_INT16_ARRAY(input.samples, output.samples, 3);
+}
+
 static void test_audio_frame_encode_rejects_invalid_input(void)
 {
-    audio_frame_t frame = {.length = 4};
+    audio_frame_t frame = {.length = 2};
     uint8_t buffer[ORATIO_HEADER_SIZE + 4];
     size_t length = 123;
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, network_audio_frame_encode(NULL, 0, buffer, sizeof(buffer), &length));
@@ -314,9 +370,7 @@ static void test_audio_frame_encode_rejects_invalid_input(void)
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, network_audio_frame_encode(&frame, 0, NULL, sizeof(buffer), &length));
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, network_audio_frame_encode(&frame, 0, buffer, sizeof(buffer), NULL));
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_SIZE, network_audio_frame_encode(&frame, 0, buffer, sizeof(buffer) - 1, &length));
-    frame.length = 3; /* A partial int16_t sample is not valid PCM. */
-    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_SIZE, network_audio_frame_encode(&frame, 0, buffer, sizeof(buffer), &length));
-    frame.length = AUDIO_FRAME_BYTES + 2;
+    frame.length = AUDIO_SAMPLES_PER_FRAME + 1;
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_SIZE, network_audio_frame_encode(&frame, 0, buffer, sizeof(buffer), &length));
     TEST_ASSERT_EQUAL_UINT32(0, length);
 }
@@ -343,8 +397,8 @@ static void test_full_audio_frame_and_sequence_boundaries(void)
 {
     static audio_frame_t input;
     static audio_frame_t output;
-    static uint8_t buffer[ORATIO_HEADER_SIZE + AUDIO_FRAME_BYTES];
-    input.length = AUDIO_FRAME_BYTES;
+    static uint8_t buffer[ORATIO_HEADER_SIZE + sizeof(input.samples)];
+    input.length = AUDIO_SAMPLES_PER_FRAME;
     for (size_t i = 0; i < AUDIO_SAMPLES_PER_FRAME; i++)
     {
         input.samples[i] = (int16_t)i;
@@ -362,7 +416,7 @@ static void test_full_audio_frame_and_sequence_boundaries(void)
         TEST_ASSERT_EQUAL_HEX8(0x80, buffer[6]);
         TEST_ASSERT_EQUAL(ESP_OK, network_audio_frame_decode(buffer, length, &output));
         TEST_ASSERT_EQUAL_HEX16(sequences[i], output.sequence);
-        TEST_ASSERT_EQUAL_UINT16(AUDIO_FRAME_BYTES, output.length);
+        TEST_ASSERT_EQUAL_UINT16(AUDIO_SAMPLES_PER_FRAME, output.length);
         TEST_ASSERT_EQUAL_INT16_ARRAY(input.samples, output.samples, AUDIO_SAMPLES_PER_FRAME);
     }
 }
@@ -371,7 +425,7 @@ static void test_audio_message_buffer_capacity_and_fifo(void)
 {
     MessageBufferHandle_t buffer = xMessageBufferCreate(NETWORK_CAPTURE_BUFFER_BYTES);
     TEST_ASSERT_NOT_NULL(buffer);
-    audio_frame_t frame = {.length = AUDIO_FRAME_BYTES};
+    audio_frame_t frame = {.length = AUDIO_SAMPLES_PER_FRAME};
     /* Buffer sizing must fit four full frames, including message length prefixes. */
     for (uint16_t i = 0; i < 4; i++)
     {
@@ -410,16 +464,19 @@ void app_main(void)
     ESP_LOGI(TAG, "Starting protocol and message-buffer tests");
     UNITY_BEGIN();
     RUN_TEST(test_encode_heartbeat);
+    RUN_TEST(test_encode_heartbeat_rssi);
+    RUN_TEST(test_decode_heartbeat_rssi);
+    RUN_TEST(test_heartbeat_rssi_unavailable);
     RUN_TEST(test_decode_heartbeat);
     RUN_TEST(test_encode_telemetry_payload);
     RUN_TEST(test_decode_telemetry_payload);
     RUN_TEST(test_decode_invalid_packet_type);
     RUN_TEST(test_decode_invalid_length);
-    RUN_TEST(test_decode_heartbeat_with_payload);
+    RUN_TEST(test_decode_heartbeat_with_invalid_payload_size);
     RUN_TEST(test_decode_short_header);
     RUN_TEST(test_encode_invalid_type);
     RUN_TEST(test_encode_oversized_payload);
-    RUN_TEST(test_encode_heartbeat_with_payload);
+    RUN_TEST(test_encode_heartbeat_with_invalid_payload_size);
     RUN_TEST(test_encode_insufficient_capacity);
     RUN_TEST(test_encode_null_arguments);
     RUN_TEST(test_decode_null_arguments);
@@ -429,6 +486,7 @@ void app_main(void)
     RUN_TEST(test_decode_maximum_audio_payload);
     RUN_TEST(test_zero_header_values_and_empty_payloads);
     RUN_TEST(test_encode_capture_audio_frame);
+    RUN_TEST(test_audio_frame_three_samples);
     RUN_TEST(test_decode_playback_audio_frame);
     RUN_TEST(test_audio_frame_encode_rejects_invalid_input);
     RUN_TEST(test_audio_frame_decode_rejects_invalid_input);

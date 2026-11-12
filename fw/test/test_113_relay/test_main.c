@@ -1,3 +1,4 @@
+#include "storage.h"
 #include "network.h"
 #include <stdbool.h>
 #include <string.h>
@@ -42,6 +43,15 @@
 /* 2. Shared task settings: startup wait, CPU core, stack, and scheduling.
  * ========================================================================== */
 
+/* Shared audio header counts samples. Use separate test constants for byte loops
+ * and pacing instead of adding private definitions to audio_common.h.
+ */
+enum
+{
+    TEST_AUDIO_PAYLOAD_BYTES = AUDIO_SAMPLES_PER_FRAME * sizeof(int16_t),
+    TEST_AUDIO_FRAME_MS = AUDIO_SAMPLES_PER_FRAME * 1000 / AUDIO_SAMPLE_RATE_HZ
+};
+
 static const char *TAG = "TEST_113_115_116";
 static const uint32_t TEST_STARTUP_DELAY_MS = 60000;
 static const BaseType_t TEST_WORKER_CORE = 1;
@@ -71,7 +81,7 @@ enum
 {
     BENCHMARK_RUN_COUNT = 10,
     BENCHMARK_FRAME_COUNT = 1000,
-    BENCHMARK_INTERVAL_MS = AUDIO_FRAME_DURATION_MS,
+    BENCHMARK_INTERVAL_MS = TEST_AUDIO_FRAME_MS,
     BENCHMARK_ECHO_STRIDE = 50,
     BENCHMARK_PATTERN_OFFSET = 13,
     BENCHMARK_REQUEST = 'Q',
@@ -244,7 +254,7 @@ static void benchmark_write_u32(uint8_t *bytes, uint32_t value)
  */
 static esp_err_t benchmark_validate_frame(const audio_frame_t *frame, uint8_t direction)
 {
-    if (frame->length != AUDIO_FRAME_BYTES)
+    if (frame->length != AUDIO_SAMPLES_PER_FRAME)
     {
         return ESP_ERR_INVALID_SIZE;
     }
@@ -255,7 +265,7 @@ static esp_err_t benchmark_validate_frame(const audio_frame_t *frame, uint8_t di
     {
         return ESP_ERR_INVALID_ARG;
     }
-    for (size_t i = BENCHMARK_PATTERN_OFFSET; i < AUDIO_FRAME_BYTES; i++)
+    for (size_t i = BENCHMARK_PATTERN_OFFSET; i < TEST_AUDIO_PAYLOAD_BYTES; i++)
     {
         if (bytes[i] != (uint8_t)i)
         {
@@ -324,7 +334,7 @@ static void benchmark_receive_echoes(MessageBufferHandle_t playback, uint32_t ru
 /* Generate one finite run, collect late echoes, then save its summary record. */
 static void benchmark_run_producer_once(benchmark_buffers_t *buffers, uint32_t run_index)
 {
-    static audio_frame_t frame = {.length = AUDIO_FRAME_BYTES};
+    static audio_frame_t frame = {.length = AUDIO_SAMPLES_PER_FRAME};
     uint8_t *bytes = (uint8_t *)frame.samples;
     memset(s_sent_us, 0, sizeof(s_sent_us));
     memset(s_echo_seen, 0, sizeof(s_echo_seen));
@@ -339,7 +349,7 @@ static void benchmark_run_producer_once(benchmark_buffers_t *buffers, uint32_t r
     uint32_t buffered = 0;
     uint32_t failures = 0;
     uint32_t echo_requests = 0;
-    for (size_t i = BENCHMARK_PATTERN_OFFSET; i < AUDIO_FRAME_BYTES; i++)
+    for (size_t i = BENCHMARK_PATTERN_OFFSET; i < TEST_AUDIO_PAYLOAD_BYTES; i++)
     {
         bytes[i] = (uint8_t)i;
     }
@@ -500,7 +510,7 @@ static void benchmark_report(const benchmark_counts_t *counts, bool final)
     ESP_LOGI(TAG, "%s=%.2f%% rate=%.2f frames/s payload=%.2f kbit/s echo-buffer-failures=%lu stack-free=%lu B",
              final ? "final-missing" : "not-yet-received",
              100.0 * (BENCHMARK_FRAME_COUNT - counts->unique) / BENCHMARK_FRAME_COUNT, fps,
-             fps * AUDIO_FRAME_BYTES * 8 / 1000.0, (unsigned long)counts->echo_failures,
+             fps * TEST_AUDIO_PAYLOAD_BYTES * 8 / 1000.0, (unsigned long)counts->echo_failures,
              (unsigned long)uxTaskGetStackHighWaterMark(NULL));
     /* In-progress missing/loss includes frames not yet generated; only final is loss. */
 }
@@ -618,7 +628,7 @@ static const uint32_t TEST_REPORT_INTERVAL_MS = 2000;
  */
 static void run_producer(MessageBufferHandle_t capture_buffer)
 {
-    static audio_frame_t stream_item = {.length = AUDIO_FRAME_BYTES};
+    static audio_frame_t stream_item = {.length = AUDIO_SAMPLES_PER_FRAME};
     uint8_t *stream_payload = (uint8_t *)stream_item.samples;
     uint32_t frame_number = 0;
     uint32_t buffered_frames = 0;
@@ -684,13 +694,13 @@ typedef struct
  */
 static void record_stream_frame(const audio_frame_t *frame, stream_counts_t *counts)
 {
-    if (frame->length != AUDIO_FRAME_BYTES)
+    if (frame->length != AUDIO_SAMPLES_PER_FRAME)
     {
         counts->malformed_frames++;
         return;
     }
     const uint8_t *payload = (const uint8_t *)frame->samples;
-    for (size_t i = 4; i < AUDIO_FRAME_BYTES; i++)
+    for (size_t i = 4; i < TEST_AUDIO_PAYLOAD_BYTES; i++)
     {
         if (payload[i] != (uint8_t)i)
         {
@@ -797,7 +807,7 @@ static void run_numbered_test(MessageBufferHandle_t buffer)
 #endif
 #if TEST_IS_PRODUCER
     /* Start the consumer first and confirm gateway registration before this send. */
-    audio_frame_t test_item = {.length = 4};
+    audio_frame_t test_item = {.length = 2}; /* Two samples carry four diagnostic bytes. */
     uint8_t *test_payload = (uint8_t *)test_item.samples;
 
     ESP_LOGI(TAG, "Waiting %u seconds before starting the numbered packet run",
@@ -899,9 +909,9 @@ static void run_numbered_test(MessageBufferHandle_t buffer)
         if (xMessageBufferReceive(playback_buffer, &received_packet, sizeof(received_packet), pdMS_TO_TICKS(1000)) ==
             sizeof(received_packet))
         {
-            if (received_packet.length != 4)
+            if (received_packet.length != 2)
             {
-                ESP_LOGD(TAG, "Received audio test frame with unexpected length: %u",
+                ESP_LOGD(TAG, "Received audio test frame with unexpected sample count: %u",
                          (unsigned int)received_packet.length);
                 malformed_packets++;
                 continue;
@@ -1003,6 +1013,14 @@ static void relay_test_task(void *arg)
  */
 void app_main(void)
 {
+    /* Application startup owns persistent storage; initialize it before networking. */
+    const esp_err_t storage_result = storage_init();
+    if (storage_result != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Storage initialization failed: %s", esp_err_to_name(storage_result));
+        return;
+    }
+
     /* Test substitutes for audio capture/playback. FreeRTOS copies a complete
      * audio_frame_t into each message; no raw sample pointer crosses the buffer.
      */

@@ -1,3 +1,4 @@
+#include "storage.h"
 #include <errno.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -117,6 +118,14 @@ static void receive_echo(int32_t socket_fd, const struct sockaddr_in *server_add
 
 void app_main(void)
 {
+    /* Application startup owns persistent storage; initialize it before networking. */
+    const esp_err_t storage_result = storage_init();
+    if (storage_result != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Storage initialization failed: %s", esp_err_to_name(storage_result));
+        return;
+    }
+
     /*
      * Bytes 0-3 contain the "ORAT" marker; bytes 4-7 hold the sequence number.
      * All remaining bytes are automatically initialized to zero.
