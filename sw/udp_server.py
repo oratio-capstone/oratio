@@ -14,12 +14,15 @@ def main():
         sock.bind((local_ip, local_port))
 
         while True:
-            buffer, sender = sock.recvfrom(buffer_size)
-            # print(f"received: {buffer}")
-            # print(f"from: {sender}")
+            try:
+                buffer, sender = sock.recvfrom(buffer_size)
+            except ConnectionResetError:
+                continue
 
+            # erroneous packet
+            if len(buffer) < 7:
+                continue
             # register node
-            # TODO: correct based on Fayza's implementation
             node_id = (buffer[1] << 8) | buffer[2]  # extract node_id
             if node_id not in nodes:
                 nodes[node_id] = sender
@@ -28,8 +31,8 @@ def main():
                 nodes[node_id] = sender
                 print(f"{node_id} has a new ip: {sender}")
 
-            # received buffer was a heartbeat, shouldn't be broadcast
-            if chr(buffer[0]) == "H":
+            # received packet isnt audio, dont forward it
+            if chr(buffer[0]) != "A":
                 continue
 
             for node, node_address in nodes.items():
