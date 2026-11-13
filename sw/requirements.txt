@@ -1,0 +1,5 @@
+# Runtime dependencies for the gateway (process 1: UDP server + WebSocket server).
+# Installed on the Pi by sw/pi-setup/02-gateway.sh.
+# Versions are pinned exactly: upgrade on purpose, never with "pip install -U".
+# Requires Python 3.11+.
+websockets==17.4
