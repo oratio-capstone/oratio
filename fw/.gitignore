@@ -4,3 +4,11 @@
 .ccls
 compile_commands.json
 .cache/clangd/
+sdkconfig.*
+!sdkconfig.defaults*
+!sdkconfig.*.defaults
+.vscode/
+managed_components/
+.pio-core/
+.venv-pio/
+build-*.log

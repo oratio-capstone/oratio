@@ -1,0 +1,10 @@
+# ESP32-S3-WROOM-1 N8R8: 8 MB flash, dual core, native USB console.
+# ESP-IDF adds this file automatically for every S3 build, after sdkconfig.defaults.
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+# Console and logs on the S3's native USB port (USB Serial/JTAG), not a UART bridge.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+# CONFIG_FREERTOS_UNICORE is not set
+# The module's 8 MB octal PSRAM is not used yet.
+# CONFIG_SPIRAM is not set
