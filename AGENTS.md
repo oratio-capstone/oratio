@@ -45,8 +45,9 @@ python tools/run_dev.py          # gateway + simulated nodes + dashboard on http
   interfaces: don't change them without the team.
 - **Packet format:** still evolving, so don't copy it into other docs. The firmware and
   `sw/gateway/protocol.py` (the gateway's copy, documented in its docstring) must always match: change both
-  in the same PR, or in PRs that land together, and update `protocol.py`'s tests. Parts of the format are planned for
-  after the POC, so the gateway must keep working when a node doesn't send them.
+  in the same PR, or in PRs that land together, and update `protocol.py`'s tests. The docstring also lists which
+  packet types the firmware sends today and which come after the POC; the gateway must keep working when a node
+  doesn't send the later ones.
 - **The UDP side only routes.** It reads the header, keeps the node → address table, forwards audio and sends
   control packets. Decoding, timers and dashboard logic belong on the WebSocket side (`ws_server.py`). The
   contract between them is `sw/gateway/messages.py`; update it when you change what crosses the queues.
