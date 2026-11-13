@@ -20,6 +20,7 @@
     <span id="conn" class="pill">connecting…</span>
     <button id="sound" title="Alarm sound while an SOS is waiting to be acknowledged">Sound: on</button>
     <button id="theme" title="Switch between automatic, light and dark">Theme: auto</button>
+    <button id="logout" title="Log this browser out of the dashboard" hidden>Log out</button>
   </header>
 
   <div id="sos-banner" role="alert" hidden></div>
@@ -139,6 +140,18 @@
       <button id="em-cancel" type="button">Cancel</button>
       <button id="em-confirm" type="button" class="danger">Listen now</button>
     </div>
+  </dialog>
+
+  <dialog id="login-dialog" aria-labelledby="login-title">
+    <form id="login-form">
+      <h2 id="login-title">Oratio Dashboard</h2>
+      <label for="login-password">Password</label>
+      <input id="login-password" type="password" autocomplete="current-password" required>
+      <p id="login-error" class="login-error" role="alert" hidden></p>
+      <div class="dialog-buttons">
+        <button id="login-submit" type="submit">Log in</button>
+      </div>
+    </form>
   </dialog>
 
   <div id="toast" role="status" aria-live="polite" hidden></div>

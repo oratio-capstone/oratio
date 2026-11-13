@@ -3,7 +3,8 @@
 // panel show on every tab.
 // Nodes can be renamed (✎) to the person wearing them; names are stored on the gateway and
 // shared by every dashboard.
-// Connects to ws://<same host>:8000/ws, shows nodes and alerts, reconnects automatically.
+// Connects to ws://<same host>:8000/ws, logs in (password once, then a session token kept in this
+// browser), shows nodes and alerts, and reconnects automatically while the session is valid.
 // "Listen" streams a node's audio frames and draws them as a live waveform.
 // Sound playback of node audio isn't implemented yet; an SOS sounds an alarm (see "SOS alarm sound").
 
@@ -18,32 +19,72 @@ let alerts = [];
 const openSos = new Map();     // node_id -> unacknowledged SOS alert (shared by every dashboard)
 const PAGE_TITLE = document.title;
 let socket = null;
+let loggedIn = false;
+let loginRefused = false;      // the gateway said no: wait for the password instead of reconnecting
+const TOKEN_KEY = "oratio-session";
+
+function savedToken() {
+  try { return localStorage.getItem(TOKEN_KEY); } catch (e) { return null; }
+}
+function saveToken(token) {
+  try {
+    if (token) localStorage.setItem(TOKEN_KEY, token);
+    else localStorage.removeItem(TOKEN_KEY);
+  } catch (e) { /* this page only */ }
+}
 
 const $ = (id) => document.getElementById(id);
 
 // ---- connection --------------------------------------------------------------
 
-function connect() {
+// credentials: { password } from the login form, or { token } from an earlier login.
+function connect(credentials) {
   setConn("connecting…", "");
-  socket = new WebSocket(WS_URL);
-  socket.binaryType = "arraybuffer";
+  loginRefused = false;
+  const ws = new WebSocket(WS_URL);
+  socket = ws;
+  ws.binaryType = "arraybuffer";
 
-  socket.onopen = () => {
-    setConn("live", "ok");
-    for (const [id, stream] of listening) {  // resume after reconnect (the gateway re-checks permission)
-      if (!stream.paused) send({ type: "listen", node_id: id, emergency: stream.emergency });
-    }
-  };
-  socket.onclose = () => {
+  ws.onopen = () => ws.send(JSON.stringify({ type: "login", ...credentials }));
+  ws.onclose = () => {
+    if (socket !== ws) return;  // an older connection (e.g. after logging out)
+    loggedIn = false;
+    if (loginRefused) return;   // the login dialog is showing
     setConn("reconnecting…", "bad");
-    setTimeout(connect, 1500);
+    const token = savedToken();
+    if (token) setTimeout(() => { if (socket === ws) connect({ token }); }, 1500);
+    else showLogin("");
   };
-  socket.onmessage = (event) => {
+  ws.onmessage = onMessage;
+}
+
+function onMessage(event) {
     if (event.data instanceof ArrayBuffer) {
       onAudio(event.data);
       return;
     }
     const msg = JSON.parse(event.data);
+    if (msg.type === "auth_ok") {
+      loggedIn = true;
+      saveToken(msg.token);
+      hideLogin();
+      setConn("live", "ok");
+      for (const [id, stream] of listening) {  // resume after reconnect (the gateway re-checks permission)
+        if (!stream.paused) send({ type: "listen", node_id: id, emergency: stream.emergency });
+      }
+      return;
+    }
+    if (msg.type === "auth_failed") {
+      loginRefused = true;
+      saveToken(null);
+      setConn("logged out", "bad");
+      showLogin(msg.message);
+      return;
+    }
+    handleMessage(msg);
+}
+
+function handleMessage(msg) {
     if (msg.type === "snapshot") {
       nodes.clear();
       for (const n of msg.nodes) nodes.set(n.node_id, n);
@@ -84,8 +125,49 @@ function connect() {
       onLogStats(msg);
     }
     scheduleRender();
-  };
 }
+
+// ---- login -------------------------------------------------------------------
+
+function showLogin(message) {
+  $("logout").hidden = true;
+  $("login-error").textContent = message || "";
+  $("login-error").hidden = !message;
+  $("login-submit").disabled = false;
+  const dialog = $("login-dialog");
+  if (!dialog.open) dialog.showModal();
+  $("login-password").focus();
+}
+
+function hideLogin() {
+  $("login-password").value = "";
+  $("logout").hidden = false;
+  if ($("login-dialog").open) $("login-dialog").close();
+}
+
+$("login-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const password = $("login-password").value;
+  if (!password) return;
+  $("login-submit").disabled = true;
+  $("login-error").hidden = true;
+  if (socket) { const old = socket; socket = null; old.close(); }
+  connect({ password });
+});
+$("login-dialog").addEventListener("cancel", (e) => e.preventDefault());  // Esc can't skip the login
+
+$("logout").addEventListener("click", () => {
+  send({ type: "logout" });
+  saveToken(null);
+  loginRefused = true;
+  for (const id of [...listening.keys()]) endStream(id);
+  nodes.clear();
+  alerts = [];
+  openSos.clear();
+  scheduleRender();
+  setConn("logged out", "bad");
+  showLogin("");
+});
 
 function send(obj) {
   if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(obj));
@@ -1050,4 +1132,5 @@ updateSoundButton();
 
 showTab();
 setInterval(scheduleRender, 250);  // keep "last seen" and the seconds counters fresh
-connect();
+if (savedToken()) connect({ token: savedToken() });
+else { setConn("logged out", "bad"); showLogin(""); }

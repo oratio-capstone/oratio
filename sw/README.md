@@ -58,7 +58,8 @@ python sw/tools/run_dev.py
 
 That starts the gateway (UDP 8989, WebSocket 8000), the dashboard page (port 8080) and a simulated
 mesh in one terminal, with each line labelled `[gateway]`, `[web]` or `[sim]`, and opens
-http://localhost:8080. **Ctrl+C stops all three.**
+http://localhost:8080. **Ctrl+C stops all three.** The dashboard asks for a password: on your laptop it
+is the throwaway `oratio-dev`, printed when `run_dev.py` starts.
 
 The simulated mesh is a tunnel with the Pi at the entrance, three fixed relays (101, 102, 103; 101 is
 the root) and ten people (nodes 1–10) walking up and down it, each joining the relay they hear best.
@@ -107,11 +108,26 @@ Nodes can be renamed from the dashboard (✎ next to each node): people by name,
 `~/.local/share/oratio/node-names.json` (outside the repo), so they survive restarts. Clear a name to
 go back to "Node 3".
 
+### Dashboard login
+
+The dashboard needs a password; until a browser has logged in, the gateway sends it nothing and
+ignores its commands. There is one shared password. The gateway only stores a salted hash of it,
+in `~/.local/share/oratio/dashboard-password` (outside the repo, readable only by the gateway's user).
+A login lasts 12 hours on that browser, and restarting the gateway logs everyone out. Five wrong
+passwords from one address lock it out for a minute, and pages from other websites can't connect.
+
+- Set or change it (on the Pi: as the gateway's user, then restart the gateway):
+  `python sw/gateway/auth.py set`. `pi-setup/03-services.sh` asks for it on first setup.
+- With no password set, the gateway still routes audio, but every dashboard login is refused.
+- Never commit it, and don't reuse the Wi-Fi password. Over the Pi's own Wi-Fi, WPA2 encrypts the
+  connection; the dashboard itself uses plain `ws://`, so don't expose it on another network.
+
 Settings (ports, timeouts, queue sizes, names file, events file and retention) are in `gateway/config.py` and can be overridden with
 environment variables, for example `WS_PORT=9000 python sw/gateway/main.py`.
 
-`gateway/udp_devserver.py` is a **temporary stand-in** for the UDP side: it tracks nodes and feeds
-the WebSocket server, but does not forward audio between nodes. The asyncio version of
+`gateway/udp_devserver.py` is a **temporary stand-in** for the UDP side. Like `udp_server.py`, it only
+routes (forwards audio between nodes and sends control packets) and passes everything else to the
+WebSocket server, which decodes it. The asyncio version of
 `udp_server.py` replaces it by exposing the same `start(q_in, q_out, host, port)` coroutine and
 following the queue contract in `gateway/messages.py`.
 

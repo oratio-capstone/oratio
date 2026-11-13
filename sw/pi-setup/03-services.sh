@@ -34,6 +34,19 @@ install_unit() {
   return 0
 }
 
+# Dashboard password: only its salted hash is stored, in the gateway user's home, readable by
+# that user only. Asked for once (or read from DASHBOARD_PASSWORD); change it later with:
+#   sudo -u <user> <venv>/bin/python <repo>/sw/gateway/auth.py set   then restart the gateway
+AUTH_PY="$REPO_DIR/sw/gateway/auth.py"
+PW_FILE="$APP_HOME/.local/share/oratio/dashboard-password"
+if [[ -f "$AUTH_PY" && ! -f "$PW_FILE" ]]; then
+  log "Setting the dashboard password (at least 8 characters; not the Wi-Fi password)"
+  [[ -n "${DASHBOARD_PASSWORD:-}" || -t 0 ]] \
+    || die "no dashboard password: run this script in a terminal, or with DASHBOARD_PASSWORD=..."
+  sudo -u "$APP_USER" env ${DASHBOARD_PASSWORD:+DASHBOARD_PASSWORD="$DASHBOARD_PASSWORD"} \
+    "$VENV_DIR/bin/python" "$AUTH_PY" set --file "$PW_FILE" || die "the dashboard password was not set"
+fi
+
 changed=0
 
 gateway_unit="[Unit]

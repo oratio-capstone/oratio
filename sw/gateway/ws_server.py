@@ -4,6 +4,14 @@ Reads events from Q in, keeps the display state (nodes, alerts), and pushes it
 to every connected browser. Commands from browsers ("listen" / "stop") go to
 the UDP side through Q out.
 
+Login (when the server has an Auth; main.py always gives it one, locked if no password is set):
+    browser -> server   {"type": "login", "password": "..."}  or  {"type": "login", "token": "..."}
+                        must be the first message, within LOGIN_TIMEOUT_S
+    server -> browser   {"type": "auth_ok", "token": "..."}   then everything below
+                        {"type": "auth_failed", "message": "..."}   then the server closes (4001)
+    browser -> server   {"type": "logout"}   ends the session
+    Connections from a page on another site (Origin host != Host) are refused at the handshake.
+
 Browser protocol (all text frames are JSON):
     server -> browser   {"type": "snapshot", "nodes": [...], "alerts": [...], "open_sos": [...]}   on connect
                         {"type": "node_update", "node": {...}}
@@ -59,12 +67,14 @@ import time
 import unicodedata
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from websockets.asyncio.server import Server, ServerConnection, serve
 from websockets.exceptions import ConnectionClosed
 
 import messages
 import protocol
+from auth import Auth
 from event_log import ALERT_KINDS, EventLog
 
 log = logging.getLogger("ws")
@@ -80,9 +90,21 @@ def clean_name(name: Any) -> str:
     return " ".join(name.split())[:MAX_NAME_LENGTH]
 
 
+LOGIN_TIMEOUT_S = 10.0
+AUTH_FAILED = 4001  # WebSocket close code: login refused
+
+
+def _host(value: str | None) -> str | None:
+    """'http://pi.local:8080' or 'pi.local:8000' -> 'pi.local'."""
+    if not value:
+        return None
+    return urlsplit(value if "//" in value else f"//{value}").hostname
+
+
 class _Client:
     def __init__(self, ws: ServerConnection, buffer: int) -> None:
         self.ws = ws
+        self.token: str | None = None
         self.outbox: asyncio.Queue[str | bytes] = asyncio.Queue(maxsize=buffer)
         # node_id -> why this dashboard may hear it: "talk", "sos" or "emergency"
         self.listening: dict[int, str] = {}
@@ -102,8 +124,10 @@ class WebSocketServer:
                  client_buffer: int = 128, alert_history: int = 50,
                  names_file: str | Path | None = None, event_log: EventLog | None = None,
                  talk_timeout: float = 3.0, talk_grace: float = 2.0,
-                 node_timeout: float = 3.0) -> None:
+                 node_timeout: float = 3.0, auth: Auth | None = None) -> None:
         self.q_in = q_in
+        self.auth = auth  # None = no login (tests only; main.py always passes one)
+        self.login_failure_delay = 1.0
         self.q_out = q_out
         self.path = path
         self.client_buffer = client_buffer
@@ -136,7 +160,7 @@ class WebSocketServer:
 
     async def start(self, host: str, port: int) -> Server:
         """Start accepting connections and consuming Q in. Returns the listening server."""
-        server = await serve(self._handle_connection, host, port)
+        server = await serve(self._handle_connection, host, port, process_request=self._check_origin)
         self._log_only("gateway_started", None, time.time(), "Gateway started")
         self._consumer = asyncio.create_task(self._consume_events(), name="ws-consume-q-in")
         self._talk_task = asyncio.create_task(self._watch_timers(), name="ws-timers")
@@ -426,11 +450,61 @@ class WebSocketServer:
 
     # ---- browsers ------------------------------------------------------------
 
+    def _check_origin(self, connection: ServerConnection, request: Any) -> Any:
+        """Refuse pages from other sites. Browsers always send Origin; the dashboard is served
+        from the same host (another port), so the host names must match."""
+        origin = request.headers.get("Origin")
+        if origin is not None and _host(origin) != _host(request.headers.get("Host")):
+            log.warning("refused a connection from origin %s", origin)
+            return connection.respond(403, "Forbidden origin\n")
+        return None
+
+    async def _login(self, ws: ServerConnection) -> str | None:
+        """Wait for the login message. Returns the session token, or None after refusing."""
+        address = str(ws.remote_address[0]) if ws.remote_address else "?"
+        try:
+            message = await asyncio.wait_for(ws.recv(), LOGIN_TIMEOUT_S)
+            cmd = json.loads(message) if isinstance(message, str) else {}
+        except (asyncio.TimeoutError, ValueError):
+            cmd = {}
+        password, token = cmd.get("password"), cmd.get("token")
+        if cmd.get("type") != "login" or not isinstance(password or token or None, str):
+            reason = "Log in first."
+            session = None
+        elif not self.auth.configured:
+            reason = "No dashboard password is set on the gateway yet (run: python auth.py set)."
+            session = None
+        elif self.auth.locked_out(address):
+            reason = "Too many wrong passwords. Wait a minute and try again."
+            session = None
+        else:
+            session = await self.auth.login_async(address, password if isinstance(password, str) else None,
+                                                  token if isinstance(token, str) else None)
+            reason = "Wrong password." if password else "Session expired. Log in again."
+        if session is None:
+            if password and self.auth.configured:
+                log.warning("wrong dashboard password from %s", address)
+                await asyncio.sleep(self.login_failure_delay)  # slows down guessing
+            await ws.send(json.dumps({"type": "auth_failed", "message": reason}))
+            await ws.close(AUTH_FAILED, "login refused")
+            return None
+        await ws.send(json.dumps({"type": "auth_ok", "token": session}))
+        return session
+
     async def _handle_connection(self, ws: ServerConnection) -> None:
         if ws.request is None or ws.request.path != self.path:
             await ws.close(1008, "unknown path")
             return
+        token = None
+        if self.auth is not None:
+            try:
+                token = await self._login(ws)
+            except ConnectionClosed:
+                return
+            if token is None:
+                return
         client = _Client(ws, self.client_buffer)
+        client.token = token
         self._clients.add(client)
         sender = asyncio.create_task(self._send_loop(client))
         log.info("dashboard connected from %s (%d open)", ws.remote_address, len(self._clients))
@@ -476,7 +550,11 @@ class WebSocketServer:
         except ValueError:
             return
         node_id = cmd.get("node_id")
-        if cmd.get("type") == "listen" and isinstance(node_id, int):
+        if cmd.get("type") == "logout":
+            if self.auth is not None and client.token:
+                self.auth.logout(client.token)
+            await client.ws.close(1000, "logged out")
+        elif cmd.get("type") == "listen" and isinstance(node_id, int):
             self._listen(client, node_id, cmd.get("emergency") is True)
         elif cmd.get("type") == "stop":
             targets = [node_id] if isinstance(node_id, int) else list(client.listening)

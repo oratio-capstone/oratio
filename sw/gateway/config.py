@@ -39,4 +39,9 @@ NAMES_FILE = _get("NAMES_FILE", os.path.join(os.path.expanduser("~"), ".local", 
 EVENTS_DB = _get("EVENTS_DB", os.path.join(os.path.expanduser("~"), ".local", "share", "oratio", "events.db"))
 EVENTS_RETENTION_DAYS = float(_get("EVENTS_RETENTION_DAYS", "90"))
 
+# Dashboard login: the salted hash of the shared password (set it with "python auth.py set").
+# Kept outside the repo. The gateway refuses to start without it.
+DASHBOARD_PASSWORD_FILE = _get("DASHBOARD_PASSWORD_FILE", os.path.join(os.path.expanduser("~"), ".local", "share",
+                                                                       "oratio", "dashboard-password"))
+
 LOG_LEVEL = _get("LOG_LEVEL", "INFO")
