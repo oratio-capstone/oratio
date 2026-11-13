@@ -21,6 +21,18 @@ Heartbeat payload (agreed with the firmware team), 15 bytes:
 
 The gateway matches each node's parent BSSID to the node with that SoftAP MAC,
 which gives the mesh tree. A level-1 node's parent is the Pi's access point.
+
+What the firmware sends today (POC) vs. later. Update this when the firmware changes:
+
+    header        in use
+    'A' audio     in use
+    'H' heartbeat in use, but with an empty payload: the 15-byte telemetry above comes after the POC
+    'T' telemetry firmware test data; the gateway ignores it
+    'S' SOS       after the POC
+    'N' control   after the POC (the gateway already sends it; firmware that doesn't know it ignores it)
+    'P' talk      not planned (no push-to-talk); the gateway accepts it but nothing sends it
+
+The gateway must keep working with nodes that don't send the "after the POC" parts yet.
 """
 
 from __future__ import annotations
