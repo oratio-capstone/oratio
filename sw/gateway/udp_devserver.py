@@ -107,5 +107,5 @@ async def start(q_in: asyncio.Queue, q_out: asyncio.Queue, host: str, port: int)
     server.port = transport.get_extra_info("sockname")[1]  # the real port, useful when port=0
     server._tasks = [asyncio.create_task(server.read_commands()),
                      asyncio.create_task(server.resend_control())]
-    log.info("UDP server (routing only) listening on %s:%d", host, server.port)
+    log.info("UDP server listening on %s:%d", host, server.port)
     return server
