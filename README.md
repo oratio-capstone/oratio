@@ -39,10 +39,10 @@ there. PlatformIO downloads its platform/tool packages automatically into the no
 user .platformio directory. That directory does not select the pio executable version.
 Generated sdkconfig files and the virtual environment are local, ignored build state.
 
-Build the S3 root firmware and C3 CI target:
+Build the S3 root and node firmware:
 
 ```powershell
-pio run -e root -e esp32-c3-devkitm-1
+pio run -e root -e node
 ```
 
 Build and link a test suite without uploading or running it:
@@ -59,8 +59,7 @@ not hardware test passes.
 ### Board-specific flash defaults
 
 Shared network settings live in fw/sdkconfig.defaults. ESP-IDF automatically adds
-fw/sdkconfig.defaults.esp32c3 for C3 targets (4 MB flash) or
-fw/sdkconfig.defaults.esp32s3 for S3 targets (8 MB flash). These small defaults files
+fw/sdkconfig.defaults.esp32s3 for the S3 (8 MB flash). These small defaults files
 belong in version control; generated per-environment sdkconfig files do not.
 Existing generated configurations retain their saved settings, so check/regenerate
 local configuration when changing board assumptions; preserve any local credentials.

@@ -37,19 +37,26 @@ steps:
     path: $(PLATFORMIO_CORE_DIR)
   displayName: 'Cache PlatformIO toolchain'
 
+# The S3 firmware: the mesh roles and the audio build.
 # Retries cover GitHub download timeouts (HTTP 504) while installing the toolchain.
 - script: |
-    pio run -e esp32-c3-devkitm-1
-  displayName: 'Build ESP32-C3'
+    pio run -e root -e node -e esp32-s3-n8r8
+  displayName: 'Build firmware (root, node, S3 audio)'
   workingDirectory: '$(Build.SourcesDirectory)/fw'
   retryCountOnTaskFailure: 2
 
-# Once you have tests under fw/test/, add:
-# - script: |
-#     pio test -e esp32-c3-devkitm-1
-#   displayName: 'Run tests (ESP32-C3)'
-#   workingDirectory: '$(Build.SourcesDirectory)/fw'
-
-# Once you add [env:esp32-s3-devkitc-1] (or similar) to platformio.ini, add:
-# - script: pio run -e esp32-s3-devkitc-1
-#   displayName: 'Build ESP32-S3'
+# A build rewrites fw/dependencies.lock when it no longer matches the components the
+# manifest resolves to. CI builds from a clean machine, so if the lock changed here,
+# the committed one is stale: fail and print the file to commit, so every laptop and
+# CI resolve exactly the same component versions.
+- script: |
+    if git diff --quiet -- fw/dependencies.lock; then
+      echo "fw/dependencies.lock is up to date."
+      exit 0
+    fi
+    echo "##vso[task.logissue type=error]fw/dependencies.lock is out of date. Commit the regenerated file printed below."
+    git --no-pager diff -- fw/dependencies.lock
+    echo "----- regenerated fw/dependencies.lock -----"
+    cat fw/dependencies.lock
+    exit 1
+  displayName: 'Check dependencies.lock is committed'

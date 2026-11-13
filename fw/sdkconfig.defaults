@@ -1,5 +1,4 @@
-# Flash size is selected by target-specific defaults, not shared across boards.
-# sdkconfig.defaults.esp32c3: 4 MB; sdkconfig.defaults.esp32s3: 8 MB.
+# Flash size is selected by the target-specific defaults (sdkconfig.defaults.esp32s3: 8 MB).
 
 # IP forwarding and NAT
 CONFIG_LWIP_IP_FORWARD=y
