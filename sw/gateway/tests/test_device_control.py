@@ -19,7 +19,7 @@ class Device(asyncio.DatagramProtocol):
 
 async def test_device_is_told_to_stream_and_to_show_an_emergency_listen():
     q_in, q_out = asyncio.Queue(), asyncio.Queue()
-    server = await udp_devserver.start(q_in, q_out, "127.0.0.1", 0, timeout=5)
+    server = await udp_devserver.start(q_in, q_out, "127.0.0.1", 0)
     loop = asyncio.get_running_loop()
     transport, device = await loop.create_datagram_endpoint(Device, remote_addr=("127.0.0.1", server.port))
     try:

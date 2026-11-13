@@ -19,10 +19,10 @@ import sim_nodes  # noqa: E402
 async def test_simulated_nodes_show_up_and_drop():
     q_in: asyncio.Queue = asyncio.Queue(maxsize=200)
     q_out: asyncio.Queue = asyncio.Queue(maxsize=200)
-    ws = WebSocketServer(q_in, q_out)
+    ws = WebSocketServer(q_in, q_out, node_timeout=0.5)
     server = await ws.start("127.0.0.1", 0)
     ws_port = server.sockets[0].getsockname()[1]
-    udp = await udp_devserver.start(q_in, q_out, "127.0.0.1", 0, timeout=0.5)
+    udp = await udp_devserver.start(q_in, q_out, "127.0.0.1", 0)
     udp_port = udp.port
 
     args = sim_nodes.argparse.Namespace(host="127.0.0.1", port=udp_port, nodes=3, talkers=1, heartbeat=0.1,

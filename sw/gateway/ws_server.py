@@ -64,6 +64,7 @@ from websockets.asyncio.server import Server, ServerConnection, serve
 from websockets.exceptions import ConnectionClosed
 
 import messages
+import protocol
 from event_log import ALERT_KINDS, EventLog
 
 log = logging.getLogger("ws")
@@ -100,7 +101,8 @@ class WebSocketServer:
     def __init__(self, q_in: asyncio.Queue, q_out: asyncio.Queue, *, path: str = "/ws",
                  client_buffer: int = 128, alert_history: int = 50,
                  names_file: str | Path | None = None, event_log: EventLog | None = None,
-                 talk_timeout: float = 3.0, talk_grace: float = 2.0) -> None:
+                 talk_timeout: float = 3.0, talk_grace: float = 2.0,
+                 node_timeout: float = 3.0) -> None:
         self.q_in = q_in
         self.q_out = q_out
         self.path = path
@@ -115,6 +117,7 @@ class WebSocketServer:
         # Talk button: last 'pressed' packet per node, and when it was released. The device repeats
         # 'pressed' about once a second, so silence for talk_timeout counts as released.
         self.talk_timeout = talk_timeout
+        self.node_timeout = node_timeout  # no packet for this long = the node stopped responding
         self.talk_grace = talk_grace
         self._talk_seen: dict[int, float] = {}
         self._talk_released: dict[int, float] = {}
@@ -136,7 +139,7 @@ class WebSocketServer:
         server = await serve(self._handle_connection, host, port)
         self._log_only("gateway_started", None, time.time(), "Gateway started")
         self._consumer = asyncio.create_task(self._consume_events(), name="ws-consume-q-in")
-        self._talk_task = asyncio.create_task(self._watch_talk(), name="ws-talk-timeouts")
+        self._talk_task = asyncio.create_task(self._watch_timers(), name="ws-timers")
         addrs = ", ".join(f"{s.getsockname()[0]}:{s.getsockname()[1]}" for s in server.sockets)
         log.info("WebSocket server listening on %s%s", addrs, self.path)
         return server
@@ -149,13 +152,46 @@ class WebSocketServer:
             except Exception:  # one bad event must never stop the dashboard
                 log.exception("could not apply event %r", event)
 
-    async def _watch_talk(self) -> None:
+    async def _watch_timers(self) -> None:
+        """Liveness and talk-button timeouts. These live here, not on the UDP side, which only routes."""
         while True:
             await asyncio.sleep(0.5)
-            try:
-                self.check_talk(time.time())
-            except Exception:
-                log.exception("talk check failed")
+            now = time.time()
+            for check in (self.check_liveness, self.check_talk):
+                try:
+                    check(now)
+                except Exception:
+                    log.exception("%s failed", check.__name__)
+
+    def check_liveness(self, now: float) -> None:
+        """A node that has sent nothing for node_timeout seconds stopped responding."""
+        for node in list(self.nodes.values()):
+            if node["status"] == "active" and now - node["last_seen"] > self.node_timeout:
+                self.apply_event(messages.node_dropped(node["node_id"], now))
+
+    def _decode(self, event: dict[str, Any]) -> None:
+        """Turn a raw packet from the UDP side into the events the dashboard logic understands.
+        A payload that doesn't decode is logged and skipped; it can never affect routing."""
+        node_id, ts, addr = event["node_id"], event.get("ts") or time.time(), event.get("addr")
+        node = self.nodes.get(node_id)
+        if node is None:
+            self.apply_event(messages.node_joined(node_id, addr, ts))
+        elif node["addr"] != addr:
+            self.apply_event(messages.node_address_changed(node_id, addr, ts))
+        kind, payload = event.get("kind"), event.get("payload") or b""
+        if kind == protocol.TYPE_HEARTBEAT.decode():
+            hb = protocol.parse_heartbeat(payload)
+            self.apply_event(messages.heartbeat(node_id, hb.rssi, role=hb.role, level=hb.level,
+                                                parent_mac=hb.parent_mac, mac=hb.mac, ts=ts)
+                             if hb else messages.heartbeat(node_id, ts=ts))
+        elif kind == protocol.TYPE_SOS.decode():
+            self.apply_event(messages.sos(node_id, ts))
+        elif kind == protocol.TYPE_TALK.decode():
+            pressed = protocol.parse_talk(payload)
+            if pressed is not None:
+                self.apply_event(messages.talk(node_id, pressed, ts))
+        else:  # telemetry and anything new still prove the node is alive
+            self._mark_active(self.nodes[node_id], ts)
 
     # ---- display state -------------------------------------------------------
 
@@ -178,7 +214,9 @@ class WebSocketServer:
         node_id = event.get("node_id")
         ts = event.get("ts") or time.time()
 
-        if kind in ("node_joined", "node_address_changed"):
+        if kind == "packet":
+            self._decode(event)
+        elif kind in ("node_joined", "node_address_changed"):
             node = self._node(node_id, ts)
             node["addr"] = event.get("addr")
             self._mark_active(node, ts)
