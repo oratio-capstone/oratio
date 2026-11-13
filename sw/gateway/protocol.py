@@ -3,23 +3,21 @@
 Single source of truth for the gateway and its test tools. It must match what
 the firmware's network task sends.
 
-Current layout (taken from the existing udp_server.py; to be confirmed with
-the firmware team):
+Header, 7 bytes, big-endian (the firmware's network.c, and sw/udp_server.py):
 
     byte 0      message type, one ASCII character
-    bytes 1-2   node_id, unsigned 16-bit, big-endian
-    bytes 3..   payload (depends on the type)
+    bytes 1-2   node_id, unsigned 16-bit (the last two bytes of the node's station MAC)
+    bytes 3-4   sequence number, unsigned 16-bit, per sender, wraps around
+    bytes 5-6   payload length in bytes; must equal the bytes that follow
+    bytes 7..   payload (depends on the type)
 
-The heartbeat payload layout and the 'A' / 'S' type characters below are
-proposals until the firmware defines them.
+Heartbeat payload (agreed with the firmware team), 15 bytes:
 
-Heartbeat payload (proposal sent to the firmware team), 15 bytes:
-
-    byte 3        role: 0 = worker (worn by a person), 1 = relay (fixed in place)
-    byte 4        mesh level, root = 1                   esp_mesh_lite_get_level()
-    byte 5        RSSI to parent in dBm, signed           esp_wifi_sta_get_ap_info()
-    bytes 6-11    parent's BSSID (its SoftAP MAC)        esp_wifi_sta_get_ap_info()
-    bytes 12-17   this node's own SoftAP MAC             esp_wifi_get_mac(WIFI_IF_AP)
+    byte 7        role: 0 = worker (worn by a person), 1 = relay (fixed in place)
+    byte 8        mesh level, root = 1                   esp_mesh_lite_get_level()
+    byte 9        RSSI to parent in dBm, signed           esp_wifi_sta_get_ap_info()
+    bytes 10-15   parent's BSSID (its SoftAP MAC)        esp_wifi_sta_get_ap_info()
+    bytes 16-21   this node's own SoftAP MAC             esp_wifi_get_mac(WIFI_IF_AP)
 
 The gateway matches each node's parent BSSID to the node with that SoftAP MAC,
 which gives the mesh tree. A level-1 node's parent is the Pi's access point.
@@ -30,12 +28,13 @@ from __future__ import annotations
 import struct
 from typing import NamedTuple
 
-HEADER = struct.Struct(">cH")
-HEADER_SIZE = HEADER.size  # 3 bytes
+HEADER = struct.Struct(">cHHH")  # type, node_id, sequence, payload length
+HEADER_SIZE = HEADER.size  # 7 bytes
 
 TYPE_HEARTBEAT = b"H"
-TYPE_AUDIO = b"A"  # proposal
-TYPE_SOS = b"S"  # proposal
+TYPE_AUDIO = b"A"
+TYPE_SOS = b"S"
+TYPE_TELEMETRY = b"T"  # firmware test telemetry; the gateway ignores it for now
 TYPE_TALK = b"P"  # proposal: talk button, payload 1 byte (1 = pressed, 0 = released)
 TYPE_CONTROL = b"N"  # proposal, gateway -> node: payload 1 byte of flags, see CONTROL_* below
 
@@ -64,20 +63,24 @@ AUDIO_FRAME_BYTES = SAMPLE_RATE * FRAME_MS // 1000 * 2  # 640
 class Packet(NamedTuple):
     type: bytes
     node_id: int
+    seq: int
     payload: bytes
 
 
 def parse(data: bytes) -> Packet | None:
-    """Split a datagram into header fields and payload. Returns None if it is too short."""
+    """Split a datagram into header fields and payload. None if it is too short or its
+    length field disagrees with its size (the firmware's decoder rejects those too)."""
     if len(data) < HEADER_SIZE:
         return None
-    msg_type, node_id = HEADER.unpack_from(data)
-    return Packet(msg_type, node_id, data[HEADER_SIZE:])
+    msg_type, node_id, seq, length = HEADER.unpack_from(data)
+    if length != len(data) - HEADER_SIZE:
+        return None
+    return Packet(msg_type, node_id, seq, data[HEADER_SIZE:])
 
 
-def build(msg_type: bytes, node_id: int, payload: bytes = b"") -> bytes:
-    """Encode a datagram. Used by the simulator and tests."""
-    return HEADER.pack(msg_type, node_id) + payload
+def build(msg_type: bytes, node_id: int, payload: bytes = b"", seq: int = 0) -> bytes:
+    """Encode a datagram. Used by the gateway (control packets), the simulator and tests."""
+    return HEADER.pack(msg_type, node_id, seq & 0xFFFF, len(payload)) + payload
 
 
 def parse_talk(payload: bytes) -> bool | None:

@@ -86,6 +86,7 @@ class SimNode:
         self.target = 0.0       # loudness the envelope is moving towards
         self.burst_left = 0     # frames left in the current syllable or pause
         self.silent = False
+        self.seq = 0
         self.talking = False
         self.control = 0               # last flags from the gateway
         self.control_at = 0.0          # when they arrived; 3 s of silence = all off
@@ -112,7 +113,8 @@ class SimNode:
     def send(self, msg_type: bytes, payload: bytes = b"") -> None:
         if self.silent or self.transport is None or time.monotonic() < self.offline_until:
             return
-        self.transport.sendto(protocol.build(msg_type, self.node_id, payload))
+        self.seq = (self.seq + 1) & 0xFFFF  # per-sender sequence number, like the firmware
+        self.transport.sendto(protocol.build(msg_type, self.node_id, payload, self.seq))
         self.sent += 1
 
     def heartbeat(self) -> None:
