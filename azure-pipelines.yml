@@ -99,10 +99,22 @@ steps:
       exit 0
     fi
     pip install -r sw/requirements-dev.txt
-    cd sw && python -m pytest -q
+    cd sw && python -m pytest -q --junitxml="$(Common.TestResultsDirectory)/gateway-tests.xml"
   displayName: 'Gateway tests (pytest)'
   workingDirectory: '$(Build.SourcesDirectory)'
   condition: and(succeeded(), eq(variables['RUN_SW'], 'true'))
+
+# Shows each gateway test's result in the run's Tests tab (and under Test Plans > Runs).
+# Runs even when tests failed, so the failures are listed. The pytest step above is what
+# fails the build; this one only reports.
+- task: PublishTestResults@2
+  inputs:
+    testResultsFormat: 'JUnit'
+    testResultsFiles: '$(Common.TestResultsDirectory)/gateway-tests.xml'
+    testRunTitle: 'Gateway tests'
+    failTaskOnFailedTests: false
+  displayName: 'Publish gateway test results'
+  condition: and(succeededOrFailed(), eq(variables['RUN_SW'], 'true'))
 
 # A build rewrites fw/dependencies.lock when it no longer matches the components the
 # manifest resolves to. CI builds from a clean machine, so if the lock changed here,
