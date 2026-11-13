@@ -16,6 +16,29 @@ variables:
   PLATFORMIO_CORE_DIR: $(Pipeline.Workspace)/.platformio
 
 steps:
+# Depth 2: a PR build checks out GitHub's merge commit, and the change detection
+# below compares it with its first parent (main).
+- checkout: self
+  fetchDepth: 2
+
+# Decide which parts to check. One pipeline (one required check) that skips what a PR
+# didn't touch: skipped steps still count as passed, so a sw/-only PR is never left
+# waiting on a firmware check. Pushes to main always run everything, and anything
+# unclear runs everything too.
+- script: |
+    run_all() { echo "Running everything: $1"; echo "##vso[task.setvariable variable=RUN_FW]true"; echo "##vso[task.setvariable variable=RUN_SW]true"; exit 0; }
+    [ "$BUILD_REASON" = "PullRequest" ] || run_all "not a pull request ($BUILD_REASON)"
+    git rev-parse -q --verify HEAD^2 >/dev/null || run_all "not a merge commit"
+    changed=$(git diff --name-only HEAD^1 HEAD) || run_all "could not list changed files"
+    echo "Files changed by this PR:"; echo "$changed" | sed 's/^/  /'
+    fw=false; sw=false
+    echo "$changed" | grep -qE '^(fw/|azure-pipelines\.yml$)' && fw=true
+    echo "$changed" | grep -qE '^(sw/|azure-pipelines\.yml$)' && sw=true
+    echo "Firmware checks: $fw    Gateway checks: $sw"
+    echo "##vso[task.setvariable variable=RUN_FW]$fw"
+    echo "##vso[task.setvariable variable=RUN_SW]$sw"
+  displayName: 'Detect what changed'
+
 # Pinned: '3.x' now resolves to Python 3.15 on ubuntu-latest, and the
 # espressif32 platform only supports Python 3.10-3.14.
 - task: UsePythonVersion@0
@@ -28,6 +51,7 @@ steps:
 - script: |
     pip install "platformio==6.1.19"
   displayName: 'Install PlatformIO (pinned)'
+  condition: and(succeeded(), eq(variables['RUN_FW'], 'true'))
 
 # Reuses the downloaded ESP-IDF between runs. The key includes platformio.ini,
 # so changing the platform version starts a fresh cache automatically.
@@ -36,6 +60,7 @@ steps:
     key: 'platformio | "$(Agent.OS)" | fw/platformio.ini'
     path: $(PLATFORMIO_CORE_DIR)
   displayName: 'Cache PlatformIO toolchain'
+  condition: and(succeeded(), eq(variables['RUN_FW'], 'true'))
 
 # The S3 firmware: the mesh roles and the audio build.
 # Retries cover GitHub download timeouts (HTTP 504) while installing the toolchain.
@@ -44,6 +69,7 @@ steps:
   displayName: 'Build firmware (root, node, S3 audio)'
   workingDirectory: '$(Build.SourcesDirectory)/fw'
   retryCountOnTaskFailure: 2
+  condition: and(succeeded(), eq(variables['RUN_FW'], 'true'))
 
 # The tests in fw/test/ run on real boards (they flash a board and talk to it over
 # serial), and CI has none. So CI only checks that every test still COMPILES for
@@ -55,6 +81,7 @@ steps:
   displayName: 'Compile tests: networking (node_test)'
   workingDirectory: '$(Build.SourcesDirectory)/fw'
   retryCountOnTaskFailure: 2
+  condition: and(succeeded(), eq(variables['RUN_FW'], 'true'))
 
 - script: |
     pio test -e esp32-s3-n8r8 -f test_157_audio_capture -f test_audio \
@@ -62,6 +89,7 @@ steps:
   displayName: 'Compile tests: audio (esp32-s3-n8r8)'
   workingDirectory: '$(Build.SourcesDirectory)/fw'
   retryCountOnTaskFailure: 2
+  condition: and(succeeded(), eq(variables['RUN_FW'], 'true'))
 
 # Gateway (Python) tests. Skips itself until the gateway tests are on this branch
 # (sw/pytest.ini), so it switches on by itself when they merge.
@@ -74,6 +102,7 @@ steps:
     cd sw && python -m pytest -q
   displayName: 'Gateway tests (pytest)'
   workingDirectory: '$(Build.SourcesDirectory)'
+  condition: and(succeeded(), eq(variables['RUN_SW'], 'true'))
 
 # A build rewrites fw/dependencies.lock when it no longer matches the components the
 # manifest resolves to. CI builds from a clean machine, so if the lock changed here,
@@ -90,3 +119,4 @@ steps:
     cat fw/dependencies.lock
     exit 1
   displayName: 'Check dependencies.lock is committed'
+  condition: and(succeeded(), eq(variables['RUN_FW'], 'true'))
