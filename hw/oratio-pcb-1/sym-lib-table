@@ -1,4 +1,4 @@
 (sym_lib_table
 	(version 7)
-	(lib (name "oratio") (type "KiCad") (uri "${ORATIO_DIR}/hw/oratio.kicad_sym") (options "") (descr ""))
+	(lib (name "oratio") (type "KiCad") (uri "${KIPRJMOD}/../oratio.kicad_sym") (options "") (descr ""))
 )
