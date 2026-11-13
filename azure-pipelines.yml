@@ -45,6 +45,36 @@ steps:
   workingDirectory: '$(Build.SourcesDirectory)/fw'
   retryCountOnTaskFailure: 2
 
+# The tests in fw/test/ run on real boards (they flash a board and talk to it over
+# serial), and CI has none. So CI only checks that every test still COMPILES for
+# the environment it is written for; passing them is still a hardware job.
+- script: |
+    pio test -e node_test \
+      -f test_102_mesh -f test_106_udp -f test_109_heartbeat -f test_113_relay -f test_155_protocol \
+      --without-uploading --without-testing
+  displayName: 'Compile tests: networking (node_test)'
+  workingDirectory: '$(Build.SourcesDirectory)/fw'
+  retryCountOnTaskFailure: 2
+
+- script: |
+    pio test -e esp32-s3-n8r8 -f test_157_audio_capture -f test_audio \
+      --without-uploading --without-testing
+  displayName: 'Compile tests: audio (esp32-s3-n8r8)'
+  workingDirectory: '$(Build.SourcesDirectory)/fw'
+  retryCountOnTaskFailure: 2
+
+# Gateway (Python) tests. Skips itself until the gateway tests are on this branch
+# (sw/pytest.ini), so it switches on by itself when they merge.
+- script: |
+    if [ ! -f sw/pytest.ini ]; then
+      echo "No sw/pytest.ini on this branch yet; skipping gateway tests."
+      exit 0
+    fi
+    pip install -r sw/requirements-dev.txt
+    cd sw && python -m pytest -q
+  displayName: 'Gateway tests (pytest)'
+  workingDirectory: '$(Build.SourcesDirectory)'
+
 # A build rewrites fw/dependencies.lock when it no longer matches the components the
 # manifest resolves to. CI builds from a clean machine, so if the lock changed here,
 # the committed one is stale: fail and print the file to commit, so every laptop and
