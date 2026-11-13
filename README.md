@@ -59,7 +59,8 @@ not hardware test passes.
 ### Board-specific flash defaults
 
 Shared network settings live in fw/sdkconfig.defaults. ESP-IDF automatically adds
-fw/sdkconfig.defaults.esp32s3 for the S3 (8 MB flash). These small defaults files
+fw/sdkconfig.defaults.esp32s3 for the S3: 8 MB flash and the console on the S3's
+native USB port (plug into the USB port, not the UART one, to see logs). These small defaults files
 belong in version control; generated per-environment sdkconfig files do not.
 Existing generated configurations retain their saved settings, so check/regenerate
 local configuration when changing board assumptions; preserve any local credentials.

@@ -1,8 +1,0 @@
-# ESP32-S3-WROOM-1 N8R8: 8 MB flash, dual core, native USB console.
-CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
-CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
-CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
-CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
-# CONFIG_FREERTOS_UNICORE is not set
-# The module's 8 MB octal PSRAM is not needed for speaker playback.
-# CONFIG_SPIRAM is not set
