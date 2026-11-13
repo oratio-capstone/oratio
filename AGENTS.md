@@ -14,6 +14,10 @@ Human-facing docs: `README.md`, `fw/README.md`, `sw/README.md`, `sw/pi-setup/REA
 - `sw/tools/`: `run_dev.py` (whole stack locally) and `sim_nodes.py` (fake nodes)
 - `sw/pi-setup/`: scripts that set up the Pi (numbered, run in order)
 
+`sw/gateway/`, `sw/tools/` and `sw/pi-setup/` arrive with PR #11. If they aren't on your branch yet, skip the rules
+about them, and don't create them. A packet format change then goes in the firmware and `sw/udp_server.py`, and
+the PR description says so, so the gateway can be updated to match.
+
 ## Commands
 
 Firmware (from `fw/`, PlatformIO Core **6.1.19** exactly; see `README.md`):
