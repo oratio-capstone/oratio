@@ -2,18 +2,17 @@
 
 Use PlatformIO Core **6.1.19** with the repository's pinned platform. Run from `fw`.
 
-| MAX98357A signal | C3 GPIO | S3 GPIO |
-| --- | --- | --- |
-| BCLK | 0 | 42 |
-| WS / LRC | 1 | 2 |
-| DIN | 3 | 1 |
-| SD_MODE | 7 | 47 |
+| MAX98357A signal | S3 GPIO |
+| --- | --- |
+| BCLK | 42 |
+| WS / LRC | 2 |
+| DIN | 1 |
+| SD_MODE | 47 |
 
 Power off before rewiring; use common ground and a compatible amplifier supply.
 SD_MODE must not also be tied to a supply. Disconnect serial monitors before upload.
 
 ```sh
-pio test -e esp32-c3-devkitm-1 -f test_audio
 pio test -e esp32-s3-n8r8 -f test_audio
 ```
 
@@ -22,9 +21,7 @@ For compile-only checks, add `--without-uploading --without-testing`.
 Expect three Unity cases, a quiet 500 Hz tone, amplifier silence, and buffered
 playback with a pause and recovery. Passing assertions alone do not prove audible
 output or successful asynchronous writes. Hardware/listening validation is separate.
-S3 uses native USB Serial/JTAG. C3 uses its existing board configuration (2 MB
-flash setting, UART primary console and USB Serial/JTAG secondary output), not
-our removed Super Mini-specific 4 MB/native-USB test defaults.
+The S3 uses its native USB Serial/JTAG port.
 
 ## Review changes (PR #14)
 

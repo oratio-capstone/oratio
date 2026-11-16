@@ -1,0 +1,682 @@
+"""WebSocket server: the dashboard half of the gateway process (task 168).
+
+Reads events from Q in, keeps the display state (nodes, alerts), and pushes it
+to every connected browser. Commands from browsers ("listen" / "stop") go to
+the UDP side through Q out.
+
+Login (when the server has an Auth; main.py always gives it one, locked if no password is set):
+    browser -> server   {"type": "login", "password": "..."}  or  {"type": "login", "token": "..."}
+                        must be the first message, within LOGIN_TIMEOUT_S
+    server -> browser   {"type": "auth_ok", "token": "..."}   then everything below
+                        {"type": "auth_failed", "message": "..."}   then the server closes (4001)
+    browser -> server   {"type": "logout"}   ends the session
+    Connections from a page on another site (Origin host != Host) are refused at the handshake.
+
+Browser protocol (all text frames are JSON):
+    server -> browser   {"type": "snapshot", "nodes": [...], "alerts": [...], "open_sos": [...]}   on connect
+                        {"type": "node_update", "node": {...}}
+                        {"type": "alert", "alert": {...}}
+                        {"type": "sos_update", "alert": {...}}   an open SOS repeated or was acknowledged
+                        binary: 2-byte node_id (big-endian) + 16-bit PCM, for nodes being listened to
+    browser -> server   {"type": "listen", "node_id": 3}   (+ "emergency": true for an emergency listen)
+                        {"type": "stop", "node_id": 3}   (or without node_id: stop everything)
+                        {"type": "rename", "node_id": 3, "name": "Alex"}   ("" clears the name)
+                        {"type": "ack", "alert_id": 12}   acknowledge an SOS
+                        {"type": "log_query", "req": 1, "node_id": 3, "kinds": ["sos"], "since": ts,
+                         "until": ts, "before_id": 120, "limit": 200}   (all fields optional)
+                        {"type": "log_stats", "req": 2, "node_id": 3, "since": ts, "until": ts}
+    server -> browser   {"type": "log_result", "req": 1, "events": [...], "more": bool}   newest first
+                        {"type": "log_stats", "req": 2, "stats": {...}}
+                        {"type": "log_event", "event": {...}}   every new log entry, alerts included
+
+Who can be heard (the gateway enforces this, not just the page):
+    A dashboard may listen to a node only while that worker's SOS is open (SOS button, or
+    later the voice keyword). Anything else needs an Emergency listen: always allowed,
+    always logged, and the device is told so it can show the wearer (LED / beep).
+    A listen that started during an SOS carries on after the SOS is acknowledged.
+    Talk button: supported but unused (the devices have none). If one is added, holding it
+    also allows listening, and those listens end shortly after it is released.
+    server -> browser   {"type": "listen_denied", "node_id": 3, "message": "..."}
+                        {"type": "listen_ended", "node_id": 3, "message": "..."}
+
+Event log: every alert plus log-only events (node_seen, renamed, gateway_started) is
+saved by event_log.EventLog, so history, the recent alerts and any unacknowledged SOS
+survive a gateway restart.
+
+Every alert has an "id". An SOS stays open (shown as a banner on every dashboard)
+until one dashboard acknowledges it. A node that keeps sending SOS while its alert
+is open bumps "count" and "last_ts" on that alert instead of adding new ones.
+
+Node names (e.g. the person wearing the device) are shared by every dashboard and
+saved to a small JSON file, so they survive a gateway restart.
+
+Mesh tree: each node dict carries "role" ("worker" / "relay"), "level", and
+"parent" (the parent's node_id, 0 for the Pi itself, None while unknown), worked
+out by matching a node's parent MAC to another node's own MAC. "near" is the
+first relay above a worker, which is the closest thing we have to a location.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import collections
+import json
+import logging
+import os
+import time
+import unicodedata
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlsplit
+
+from websockets.asyncio.server import Server, ServerConnection, serve
+from websockets.exceptions import ConnectionClosed
+
+import messages
+import protocol
+from auth import Auth
+from event_log import ALERT_KINDS, EventLog
+
+log = logging.getLogger("ws")
+
+MAX_NAME_LENGTH = 32
+
+
+def clean_name(name: Any) -> str:
+    """Trim, drop control characters and limit length. Returns "" for no name."""
+    if not isinstance(name, str):
+        return ""
+    name = "".join(ch for ch in name if unicodedata.category(ch)[0] != "C")
+    return " ".join(name.split())[:MAX_NAME_LENGTH]
+
+
+LOGIN_TIMEOUT_S = 10.0
+AUTH_FAILED = 4001  # WebSocket close code: login refused
+
+
+def _host(value: str | None) -> str | None:
+    """'http://pi.local:8080' or 'pi.local:8000' -> 'pi.local'."""
+    if not value:
+        return None
+    return urlsplit(value if "//" in value else f"//{value}").hostname
+
+
+class _Client:
+    def __init__(self, ws: ServerConnection, buffer: int) -> None:
+        self.ws = ws
+        self.token: str | None = None
+        self.outbox: asyncio.Queue[str | bytes] = asyncio.Queue(maxsize=buffer)
+        # node_id -> why this dashboard may hear it: "talk", "sos" or "emergency"
+        self.listening: dict[int, str] = {}
+        self.emergency_since: dict[int, float] = {}
+
+    @property
+    def who(self) -> str:
+        addr = self.ws.remote_address
+        return addr[0] if addr else "unknown"
+
+
+GATEWAY = 0  # "parent" value for level-1 nodes: their parent is the Pi itself
+
+
+class WebSocketServer:
+    def __init__(self, q_in: asyncio.Queue, q_out: asyncio.Queue, *, path: str = "/ws",
+                 client_buffer: int = 128, alert_history: int = 50,
+                 names_file: str | Path | None = None, event_log: EventLog | None = None,
+                 talk_timeout: float = 3.0, talk_grace: float = 2.0,
+                 node_timeout: float = 3.0, auth: Auth | None = None) -> None:
+        self.q_in = q_in
+        self.auth = auth  # None = no login (tests only; main.py always passes one)
+        self.login_failure_delay = 1.0
+        self.q_out = q_out
+        self.path = path
+        self.client_buffer = client_buffer
+        self.nodes: dict[int, dict[str, Any]] = {}
+        self.alerts: collections.deque[dict[str, Any]] = collections.deque(maxlen=alert_history)
+        # Unacknowledged SOS alerts by node. Kept apart from the history so an SOS can
+        # never scroll out of view before someone has seen it.
+        self.open_sos: dict[int, dict[str, Any]] = {}
+        self._by_mac: dict[str, int] = {}  # SoftAP MAC -> node_id, to resolve parents
+        self._seen: set[int] = set()       # nodes whose first heartbeat was logged this run
+        # Talk button: last 'pressed' packet per node, and when it was released. The device repeats
+        # 'pressed' about once a second, so silence for talk_timeout counts as released.
+        self.talk_timeout = talk_timeout
+        self.node_timeout = node_timeout  # no packet for this long = the node stopped responding
+        self.talk_grace = talk_grace
+        self._talk_seen: dict[int, float] = {}
+        self._talk_released: dict[int, float] = {}
+        # Recent paths to the Pi per node: [(since_ts, (parent, grandparent, ...)), ...].
+        # A relay is only declared dead after the heartbeat timeout, and by then the mesh may
+        # have rerouted its children, so the alert looks up who was behind it when last heard.
+        self._paths: dict[int, list[tuple[float, tuple[int, ...]]]] = {}
+        self.events = event_log or EventLog(None)
+        self._restore_alerts()
+        self._clients: set[_Client] = set()
+        self._listeners: collections.Counter[int] = collections.Counter()
+        self.names_file = Path(names_file) if names_file else None
+        self.names: dict[int, str] = self._load_names()
+
+    # ---- running -------------------------------------------------------------
+
+    async def start(self, host: str, port: int) -> Server:
+        """Start accepting connections and consuming Q in. Returns the listening server."""
+        server = await serve(self._handle_connection, host, port, process_request=self._check_origin)
+        self._log_only("gateway_started", None, time.time(), "Gateway started")
+        self._consumer = asyncio.create_task(self._consume_events(), name="ws-consume-q-in")
+        self._talk_task = asyncio.create_task(self._watch_timers(), name="ws-timers")
+        addrs = ", ".join(f"{s.getsockname()[0]}:{s.getsockname()[1]}" for s in server.sockets)
+        log.info("WebSocket server listening on %s%s", addrs, self.path)
+        return server
+
+    async def _consume_events(self) -> None:
+        while True:
+            event = await self.q_in.get()
+            try:
+                self.apply_event(event)
+            except Exception:  # one bad event must never stop the dashboard
+                log.exception("could not apply event %r", event)
+
+    async def _watch_timers(self) -> None:
+        """Liveness and talk-button timeouts. These live here, not on the UDP side, which only routes."""
+        while True:
+            await asyncio.sleep(0.5)
+            now = time.time()
+            for check in (self.check_liveness, self.check_talk):
+                try:
+                    check(now)
+                except Exception:
+                    log.exception("%s failed", check.__name__)
+
+    def check_liveness(self, now: float) -> None:
+        """A node that has sent nothing for node_timeout seconds stopped responding."""
+        for node in list(self.nodes.values()):
+            if node["status"] == "active" and now - node["last_seen"] > self.node_timeout:
+                self.apply_event(messages.node_dropped(node["node_id"], now))
+
+    def _decode(self, event: dict[str, Any]) -> None:
+        """Turn a raw packet from the UDP side into the events the dashboard logic understands.
+        A payload that doesn't decode is logged and skipped; it can never affect routing."""
+        node_id, ts, addr = event["node_id"], event.get("ts") or time.time(), event.get("addr")
+        node = self.nodes.get(node_id)
+        if node is None:
+            self.apply_event(messages.node_joined(node_id, addr, ts))
+        elif node["addr"] != addr:
+            self.apply_event(messages.node_address_changed(node_id, addr, ts))
+        kind, payload = event.get("kind"), event.get("payload") or b""
+        if kind == protocol.TYPE_HEARTBEAT.decode():
+            hb = protocol.parse_heartbeat(payload)
+            self.apply_event(messages.heartbeat(node_id, hb.rssi, role=hb.role, level=hb.level,
+                                                parent_mac=hb.parent_mac, mac=hb.mac, ts=ts)
+                             if hb else messages.heartbeat(node_id, ts=ts))
+        elif kind == protocol.TYPE_SOS.decode():
+            self.apply_event(messages.sos(node_id, ts))
+        elif kind == protocol.TYPE_TALK.decode():
+            pressed = protocol.parse_talk(payload)
+            if pressed is not None:
+                self.apply_event(messages.talk(node_id, pressed, ts))
+        else:  # telemetry and anything new still prove the node is alive
+            self._mark_active(self.nodes[node_id], ts)
+
+    # ---- display state -------------------------------------------------------
+
+    def snapshot(self) -> dict[str, Any]:
+        return {"type": "snapshot",
+                "nodes": sorted(self.nodes.values(), key=lambda n: n["node_id"]),
+                "alerts": list(self.alerts),
+                "open_sos": sorted(self.open_sos.values(), key=lambda a: a["ts"])}
+
+    def apply_event(self, event: Any) -> None:
+        if isinstance(event, tuple) and event[0] == messages.AUDIO:
+            _, node_id, pcm = event
+            frame = node_id.to_bytes(2, "big") + pcm
+            for client in list(self._clients):
+                if node_id in client.listening:
+                    self._push(client, frame)
+            return
+
+        kind = event.get("type")
+        node_id = event.get("node_id")
+        ts = event.get("ts") or time.time()
+
+        if kind == "packet":
+            self._decode(event)
+        elif kind in ("node_joined", "node_address_changed"):
+            node = self._node(node_id, ts)
+            node["addr"] = event.get("addr")
+            self._mark_active(node, ts)
+        elif kind == "heartbeat":
+            node = self._node(node_id, ts)
+            for field in ("link", "role", "level", "parent_mac", "mac"):
+                if event.get(field) is not None:
+                    node[field] = event[field]
+            if node["mac"]:
+                self._by_mac[node["mac"]] = node_id
+            self._resolve_tree(node)
+            self._record_path(node_id, ts)
+            if node_id not in self._seen:  # logged on the first heartbeat, once the role is known
+                self._seen.add(node_id)
+                self._log_only("node_seen", node_id, ts, f"{self.label(node_id)} connected")
+            self._mark_active(node, ts)
+        elif kind == "node_dropped":
+            node = self.nodes.get(node_id)
+            if node and node["status"] != "dropped":
+                self._end_talk(node_id, ts)
+                node["status"] = "dropped"
+                self._broadcast({"type": "node_update", "node": node})
+                if node["role"] == "relay":
+                    self._relay_dropped(node_id, ts)
+                else:
+                    self._alert("node_dropped", node_id, ts, f"{self.label(node_id)} stopped responding")
+        elif kind == "talk":
+            node = self._node(node_id, ts)
+            if event.get("pressed"):
+                self._talk_seen[node_id] = ts
+                self._talk_released.pop(node_id, None)
+                node["talking"] = True
+                self._mark_active(node, ts)
+            else:
+                self._end_talk(node_id, ts)
+        elif kind == "sos":
+            self._node(node_id, ts)
+            open_alert = self.open_sos.get(node_id)
+            if open_alert:  # still waiting for someone to acknowledge: don't pile up alerts
+                open_alert["count"] += 1
+                open_alert["last_ts"] = ts
+                self.events.update(open_alert["id"], {"count": open_alert["count"], "last_ts": ts})
+                self._broadcast({"type": "sos_update", "alert": open_alert})
+            else:
+                alert = self._alert("sos", node_id, ts, f"SOS from {self.label(node_id)}",
+                                    acked=False, count=1, last_ts=ts)
+                self.open_sos[node_id] = alert
+        else:
+            log.debug("ignoring unknown event %r", event)
+
+    def _node(self, node_id: int, ts: float) -> dict[str, Any]:
+        node = self.nodes.get(node_id)
+        if node is None:
+            node = {"node_id": node_id, "name": self.names.get(node_id), "status": "new",
+                    "addr": None, "last_seen": ts, "link": None, "role": None, "level": None,
+                    "mac": None, "parent_mac": None, "parent": None, "near": None, "talking": False}
+            self.nodes[node_id] = node
+        return node
+
+    def _mark_active(self, node: dict[str, Any], ts: float) -> None:
+        if node["status"] == "dropped":
+            self._alert("node_rejoined", node["node_id"], ts, f"{self.label(node['node_id'])} is back")
+        node["status"] = "active"
+        node["last_seen"] = ts
+        self._broadcast({"type": "node_update", "node": node})
+
+    def label(self, node_id: int) -> str:
+        """How a node is named in alerts: "Alex (node 3)", "Tunnel B (relay 2)", or "Node 3"."""
+        node = self.nodes.get(node_id)
+        kind = "relay" if node and node["role"] == "relay" else "node"
+        name = self.names.get(node_id)
+        return f"{name} ({kind} {node_id})" if name else f"{kind.capitalize()} {node_id}"
+
+    # ---- mesh tree -----------------------------------------------------------
+
+    def _resolve_tree(self, node: dict[str, Any]) -> None:
+        """Fill in "parent" and "near" from the MACs. Runs on every heartbeat, so the
+        tree heals by itself within a second when a parent shows up late or a node moves."""
+        if node["level"] == 1:
+            node["parent"] = GATEWAY
+        elif node["parent_mac"]:
+            node["parent"] = self._by_mac.get(node["parent_mac"])
+        node["near"] = None
+        if node["role"] != "relay":
+            for ancestor in self.ancestors(node["node_id"]):
+                if self.nodes[ancestor]["role"] == "relay":
+                    node["near"] = ancestor
+                    break
+
+    def ancestors(self, node_id: int) -> list[int]:
+        """Node ids from this node's parent up to the root (excluding the Pi)."""
+        chain: list[int] = []
+        parent = self.nodes[node_id]["parent"] if node_id in self.nodes else None
+        while parent and parent in self.nodes and parent != node_id and parent not in chain:
+            chain.append(parent)
+            parent = self.nodes[parent]["parent"]
+        return chain
+
+    def _record_path(self, node_id: int, ts: float) -> None:
+        path = tuple(self.ancestors(node_id))
+        history = self._paths.setdefault(node_id, [])
+        if not history or history[-1][1] != path:
+            history.append((ts, path))
+            del history[:-4]  # a few recent changes are enough
+
+    def _path_at(self, node_id: int, ts: float) -> tuple[int, ...]:
+        """The node's path to the Pi as it was at time ts."""
+        path: tuple[int, ...] = ()
+        for since, p in self._paths.get(node_id, []):
+            if since <= ts:
+                path = p
+        return path
+
+    def _relay_dropped(self, relay_id: int, ts: float) -> None:
+        """A relay going down cuts off everyone behind it until the mesh reroutes, so
+        the alert says who was connected through it when it was last heard."""
+        # Just after its last heartbeat: covers people whose own heartbeat came a moment later,
+        # but is earlier than the mesh can reroute them (several seconds).
+        last_heard = self.nodes[relay_id]["last_seen"] + 1.0
+        behind = [n["node_id"] for n in sorted(self.nodes.values(), key=lambda n: n["node_id"])
+                  if n["role"] != "relay" and relay_id in self._path_at(n["node_id"], last_heard)]
+        if behind:
+            who = ", ".join(self.label(i) for i in behind)
+            message = f"{self.label(relay_id)} stopped responding. Connected through it: {who}"
+        else:
+            message = f"{self.label(relay_id)} stopped responding (nobody was connected through it)"
+        self._alert("relay_dropped", relay_id, ts, message, behind=behind)
+
+    # ---- names ---------------------------------------------------------------
+
+    async def rename(self, node_id: int, name: Any) -> None:
+        name = clean_name(name)
+        if self.names.get(node_id, "") == name:
+            return
+        before = self.label(node_id)
+        if name:
+            self.names[node_id] = name
+        else:
+            self.names.pop(node_id, None)
+        node = self.nodes.get(node_id)
+        if node is not None:
+            node["name"] = name or None
+            self._broadcast({"type": "node_update", "node": node})
+        self._log_only("renamed", node_id, time.time(),
+                       f"{before} renamed to {name}" if name else f"{before}: name cleared", name=name or None)
+        await asyncio.to_thread(self._save_names, dict(self.names))  # file I/O off the event loop
+
+    def _load_names(self) -> dict[int, str]:
+        if not self.names_file or not self.names_file.exists():
+            return {}
+        try:
+            raw = json.loads(self.names_file.read_text(encoding="utf-8"))
+            return {int(k): clean_name(v) for k, v in raw.items() if clean_name(v)}
+        except (OSError, ValueError, AttributeError) as exc:
+            log.warning("could not read node names from %s: %s", self.names_file, exc)
+            return {}
+
+    def _save_names(self, names: dict[int, str]) -> None:
+        if not self.names_file:
+            return
+        try:
+            self.names_file.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.names_file.with_suffix(".tmp")
+            tmp.write_text(json.dumps({str(k): v for k, v in sorted(names.items())}, indent=2),
+                           encoding="utf-8")
+            os.replace(tmp, self.names_file)  # atomic: never leaves a half-written file
+        except OSError as exc:
+            log.warning("could not save node names to %s: %s", self.names_file, exc)
+
+    def _alert(self, kind: str, node_id: int, ts: float, message: str, **extra: Any) -> dict[str, Any]:
+        """An alert: shown in the Live tab's list and saved in the event log."""
+        alert = self.events.add(kind, node_id=node_id, message=message, ts=ts, **extra)
+        self.alerts.append(alert)
+        log.info(message)
+        self._broadcast({"type": "alert", "alert": alert})
+        self._broadcast({"type": "log_event", "event": alert})
+        return alert
+
+    def _log_only(self, kind: str, node_id: int | None, ts: float, message: str, **extra: Any) -> None:
+        """Worth keeping in the history, but not an alert."""
+        event = self.events.add(kind, node_id=node_id, message=message, ts=ts, **extra)
+        log.info(message)
+        self._broadcast({"type": "log_event", "event": event})
+
+    def _restore_alerts(self, open_sos_hours: float = 12) -> None:
+        """After a restart: the recent alerts again, and every SOS nobody acknowledged."""
+        self.alerts.extend(self.events.recent(ALERT_KINDS, self.alerts.maxlen or 50))
+        by_id = {a["id"]: a for a in self.alerts}
+        since = time.time() - open_sos_hours * 3600
+        for event in self.events.recent(("sos",), 200, since=since):
+            if not event.get("acked"):
+                self.open_sos[event["node_id"]] = by_id.get(event["id"], event)
+        if self.open_sos:
+            log.warning("%d SOS still unacknowledged from before the restart", len(self.open_sos))
+
+    def acknowledge(self, alert_id: int) -> None:
+        """Close an open SOS for every dashboard; the alert itself records when."""
+        for node_id, alert in list(self.open_sos.items()):
+            if alert["id"] == alert_id:
+                del self.open_sos[node_id]
+                alert["acked"] = True
+                alert["acked_ts"] = time.time()
+                self.events.update(alert_id, {"acked": True, "acked_ts": alert["acked_ts"]})
+                log.info("SOS from %s acknowledged", self.label(node_id))
+                self._broadcast({"type": "sos_update", "alert": alert})
+                return
+
+    # ---- browsers ------------------------------------------------------------
+
+    def _check_origin(self, connection: ServerConnection, request: Any) -> Any:
+        """Refuse pages from other sites. Browsers always send Origin; the dashboard is served
+        from the same host (another port), so the host names must match."""
+        origin = request.headers.get("Origin")
+        if origin is not None and _host(origin) != _host(request.headers.get("Host")):
+            log.warning("refused a connection from origin %s", origin)
+            return connection.respond(403, "Forbidden origin\n")
+        return None
+
+    async def _login(self, ws: ServerConnection) -> str | None:
+        """Wait for the login message. Returns the session token, or None after refusing."""
+        address = str(ws.remote_address[0]) if ws.remote_address else "?"
+        try:
+            message = await asyncio.wait_for(ws.recv(), LOGIN_TIMEOUT_S)
+            cmd = json.loads(message) if isinstance(message, str) else {}
+        except (asyncio.TimeoutError, ValueError):
+            cmd = {}
+        password, token = cmd.get("password"), cmd.get("token")
+        if cmd.get("type") != "login" or not isinstance(password or token or None, str):
+            reason = "Log in first."
+            session = None
+        elif not self.auth.configured:
+            reason = "No dashboard password is set on the gateway yet (run: python auth.py set)."
+            session = None
+        elif self.auth.locked_out(address):
+            reason = "Too many wrong passwords. Wait a minute and try again."
+            session = None
+        else:
+            session = await self.auth.login_async(address, password if isinstance(password, str) else None,
+                                                  token if isinstance(token, str) else None)
+            reason = "Wrong password." if password else "Session expired. Log in again."
+        if session is None:
+            if password and self.auth.configured:
+                log.warning("wrong dashboard password from %s", address)
+                await asyncio.sleep(self.login_failure_delay)  # slows down guessing
+            await ws.send(json.dumps({"type": "auth_failed", "message": reason}))
+            await ws.close(AUTH_FAILED, "login refused")
+            return None
+        await ws.send(json.dumps({"type": "auth_ok", "token": session}))
+        return session
+
+    async def _handle_connection(self, ws: ServerConnection) -> None:
+        if ws.request is None or ws.request.path != self.path:
+            await ws.close(1008, "unknown path")
+            return
+        token = None
+        if self.auth is not None:
+            try:
+                token = await self._login(ws)
+            except ConnectionClosed:
+                return
+            if token is None:
+                return
+        client = _Client(ws, self.client_buffer)
+        client.token = token
+        self._clients.add(client)
+        sender = asyncio.create_task(self._send_loop(client))
+        log.info("dashboard connected from %s (%d open)", ws.remote_address, len(self._clients))
+        self._push(client, json.dumps(self.snapshot()))
+        try:
+            async for message in ws:
+                await self._handle_command(client, message)
+        except ConnectionClosed:
+            pass
+        finally:
+            self._clients.discard(client)
+            sender.cancel()
+            for node_id in list(client.listening):
+                self._stop_listening(client, node_id)
+            log.info("dashboard disconnected (%d open)", len(self._clients))
+
+    async def _send_loop(self, client: _Client) -> None:
+        try:
+            while True:
+                await client.ws.send(await client.outbox.get())
+        except ConnectionClosed:
+            pass
+
+    def _push(self, client: _Client, data: str | bytes) -> None:
+        """Queue data for one browser without waiting; drop a browser that falls too far behind."""
+        try:
+            client.outbox.put_nowait(data)
+        except asyncio.QueueFull:
+            log.warning("dashboard %s too slow, disconnecting", client.ws.remote_address)
+            self._clients.discard(client)
+            asyncio.ensure_future(client.ws.close(1013, "too slow"))
+
+    def _broadcast(self, obj: dict[str, Any]) -> None:
+        data = json.dumps(obj)
+        for client in list(self._clients):
+            self._push(client, data)
+
+    async def _handle_command(self, client: _Client, message: str | bytes) -> None:
+        if isinstance(message, bytes):
+            return
+        try:
+            cmd = json.loads(message)
+        except ValueError:
+            return
+        node_id = cmd.get("node_id")
+        if cmd.get("type") == "logout":
+            if self.auth is not None and client.token:
+                self.auth.logout(client.token)
+            await client.ws.close(1000, "logged out")
+        elif cmd.get("type") == "listen" and isinstance(node_id, int):
+            self._listen(client, node_id, cmd.get("emergency") is True)
+        elif cmd.get("type") == "stop":
+            targets = [node_id] if isinstance(node_id, int) else list(client.listening)
+            for target in targets:
+                self._stop_listening(client, target)
+        elif cmd.get("type") == "rename" and isinstance(node_id, int):
+            await self.rename(node_id, cmd.get("name"))
+        elif cmd.get("type") == "ack" and isinstance(cmd.get("alert_id"), int):
+            self.acknowledge(cmd["alert_id"])
+        elif cmd.get("type") in ("log_query", "log_stats"):
+            await self._answer_log(client, cmd)
+
+    async def _answer_log(self, client: _Client, cmd: dict[str, Any]) -> None:
+        """History requests from the Log tab. Answered to that dashboard only."""
+        def number(key: str) -> float | None:
+            value = cmd.get(key)
+            return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+        node_id = cmd.get("node_id") if isinstance(cmd.get("node_id"), int) else None
+        since, until = number("since"), number("until")
+        try:
+            if cmd["type"] == "log_stats":
+                stats = await asyncio.wrap_future(self.events.stats(node_id=node_id, since=since, until=until))
+                self._push(client, json.dumps({"type": "log_stats", "req": cmd.get("req"), "stats": stats}))
+                return
+            raw_kinds = cmd.get("kinds") if isinstance(cmd.get("kinds"), list) else []
+            kinds = [k for k in raw_kinds if isinstance(k, str)] or None
+            before = cmd.get("before_id") if isinstance(cmd.get("before_id"), int) else None
+            limit = int(number("limit") or 200)
+            events = await asyncio.wrap_future(self.events.query(
+                node_id=node_id, kinds=kinds, since=since, until=until, before_id=before, limit=limit + 1))
+        except Exception:  # a bad query must not take the connection down
+            log.exception("log request failed: %r", cmd)
+            return
+        self._push(client, json.dumps({"type": "log_result", "req": cmd.get("req"),
+                                       "events": events[:limit], "more": len(events) > limit}))
+
+    # ---- who can be heard -----------------------------------------------------
+
+    def grant(self, node_id: int) -> str | None:
+        """Why a dashboard may listen to this node right now, or None."""
+        node = self.nodes.get(node_id)
+        if node and node["talking"]:
+            return "talk"
+        if node_id in self.open_sos:
+            return "sos"
+        return None
+
+    def _end_talk(self, node_id: int, ts: float) -> None:
+        node = self.nodes.get(node_id)
+        self._talk_seen.pop(node_id, None)
+        if node and node["talking"]:
+            node["talking"] = False
+            self._talk_released[node_id] = ts
+            self._broadcast({"type": "node_update", "node": node})
+
+    def check_talk(self, now: float) -> None:
+        """Release talk buttons that went quiet, then end listens that relied on them."""
+        for node_id, seen in list(self._talk_seen.items()):
+            if now - seen > self.talk_timeout:
+                self._end_talk(node_id, now)
+        for node_id, released in list(self._talk_released.items()):
+            if now - released < self.talk_grace:
+                continue
+            del self._talk_released[node_id]
+            if self.nodes.get(node_id, {}).get("talking"):
+                continue  # pressed again within the grace period
+            for client in list(self._clients):
+                if client.listening.get(node_id) != "talk":
+                    continue
+                if node_id in self.open_sos:
+                    client.listening[node_id] = "sos"  # an SOS keeps the line open
+                    continue
+                self._stop_listening(client, node_id)
+                self._push(client, json.dumps({"type": "listen_ended", "node_id": node_id,
+                                               "reason": "talk_released",
+                                               "message": f"{self.label(node_id)} stopped talking"}))
+
+    def _listen(self, client: _Client, node_id: int, emergency: bool) -> None:
+        if node_id in client.listening:
+            return
+        reason = "emergency" if emergency else self.grant(node_id)
+        if reason is None or node_id not in self.nodes:
+            self._push(client, json.dumps({
+                "type": "listen_denied", "node_id": node_id,
+                "message": f"{self.label(node_id)} has no open SOS. "
+                           "Use Emergency listen if they may be in danger."}))
+            return
+        if reason == "emergency":
+            client.emergency_since[node_id] = time.time()
+            if not self._emergency_listeners(node_id):
+                self._command(messages.notify(node_id, "emergency_listen_on"))
+            self._log_only("emergency_listen", node_id, time.time(),
+                           f"Emergency listen on {self.label(node_id)} from dashboard {client.who}",
+                           dashboard=client.who)
+        client.listening[node_id] = reason
+        self._listeners[node_id] += 1
+        if self._listeners[node_id] == 1:  # first dashboard listening to this node
+            self._command(messages.listen(node_id))
+
+    def _emergency_listeners(self, node_id: int) -> int:
+        return sum(1 for c in self._clients if c.listening.get(node_id) == "emergency")
+
+    def _stop_listening(self, client: _Client, node_id: int) -> None:
+        reason = client.listening.pop(node_id, None)
+        if reason is None:
+            return
+        self._listeners[node_id] -= 1
+        if self._listeners[node_id] <= 0:  # last dashboard stopped listening
+            del self._listeners[node_id]
+            self._command(messages.stop(node_id))
+        if reason == "emergency":
+            started = client.emergency_since.pop(node_id, time.time())
+            if not self._emergency_listeners(node_id):
+                self._command(messages.notify(node_id, "emergency_listen_off"))
+            self._log_only("emergency_listen_ended", node_id, time.time(),
+                           f"Emergency listen on {self.label(node_id)} ended after "
+                           f"{time.time() - started:.0f} s", dashboard=client.who,
+                           seconds=round(time.time() - started, 1))
+
+    def _command(self, msg: dict[str, Any]) -> None:
+        """Send a command to the UDP side without waiting (it drains Q out constantly)."""
+        try:
+            self.q_out.put_nowait(msg)
+        except asyncio.QueueFull:
+            log.warning("Q out full, dropped %r", msg)

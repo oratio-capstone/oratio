@@ -1,5 +1,5 @@
 // AB#157 audio capture test. Reads the INMP441 for 5 s, prints a live level bar, then passes or fails.
-// Run: pio test -e esp32-s3-devkitc-1 -f test_157_audio_capture   (talk or clap near the mic while it runs)
+// Run: pio test -e esp32-s3-n8r8 -f test_157_audio_capture   (talk or clap near the mic while it runs)
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>

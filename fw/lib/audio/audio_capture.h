@@ -10,13 +10,7 @@
 #include "freertos/message_buffer.h"
 #include "sdkconfig.h"
 
-#if CONFIG_IDF_TARGET_ESP32C3
-#define AUDIO_CAPTURE_I2S_PORT I2S_NUM_0 // C3 has only one I2S controller
-#define AUDIO_CAPTURE_SCK_GPIO GPIO_NUM_4
-#define AUDIO_CAPTURE_WS_GPIO GPIO_NUM_5
-#define AUDIO_CAPTURE_SD_GPIO GPIO_NUM_6
-#define AUDIO_CAPTURE_PTT_GPIO GPIO_NUM_10 // push-to-talk button to GND, internal pull-up
-#elif CONFIG_IDF_TARGET_ESP32S3
+#if CONFIG_IDF_TARGET_ESP32S3
 #define AUDIO_CAPTURE_I2S_PORT I2S_NUM_0   // speaker uses I2S_NUM_1
 #define AUDIO_CAPTURE_SCK_GPIO GPIO_NUM_39 // PCB pin map (left side)
 #define AUDIO_CAPTURE_WS_GPIO GPIO_NUM_40

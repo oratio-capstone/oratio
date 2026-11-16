@@ -1,0 +1,8 @@
+"Reference","Qty","Value","Footprint","Datasheet"
+"C1","1","100uF","Capacitor_THT:CP_Radial_D5.0mm_P2.00mm",""
+"D1,D2,D3","3","LED","LED_THT:LED_D3.0mm",""
+"R1,R2,R3","3","330R","Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal",""
+"SW1","1","SW_SPST","Button_Switch_THT:SW_PUSH_6mm_H5mm",""
+"U1","1","ESP32-S3-DevKitC","PCM_Espressif:ESP32-S3-DevKitC",""
+"U2","1","INMP441 BREAKOUT","oratio:INMP441_Breakout",""
+"U3","1","MAX98357A BREAKOUT","oratio:MAX98357A_Breakout",""

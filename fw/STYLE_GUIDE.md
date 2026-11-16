@@ -84,7 +84,7 @@ static esp_err_t configure_i2s_dma(void)
 * **Task Stack Protection:** Size each task's stack for its actual call path and check stack high-water marks under load. Prefer reusable buffers for large packet and audio frames rather than imposing an arbitrary local-buffer size limit.
 * **Internal SRAM vs. External PSRAM:**
   * **Internal SRAM:** Use memory with the capabilities required by each driver; in particular, I2S DMA buffers need DMA-capable memory. Internal SRAM also holds ordinary application state when appropriate.
-  * **External PSRAM:** The temporary ESP32-C3 has no PSRAM. On the ESP32-S3 N8R8, once PSRAM is configured and available, use it for suitable bulk storage (telemetry logs, audio record-and-replay buffers, large routing/history tables). Do not assume a PSRAM buffer is suitable for I2S DMA.
+  * **External PSRAM:** On the ESP32-S3 N8R8, once PSRAM is configured and available, use it for suitable bulk storage (telemetry logs, audio record-and-replay buffers, large routing/history tables). Do not assume a PSRAM buffer is suitable for I2S DMA.
 
 ---
 

@@ -1,0 +1,17 @@
+menu "Oratio Network Configuration"
+
+    config ORATIO_ROUTER_SSID
+        string "Laptop hotspot SSID"
+        default ""
+        help
+            Wi-Fi network name of the laptop hotspot.
+            The root node uses this network as its upstream connection.
+
+    config ORATIO_ROUTER_PASSWORD
+        string "Laptop hotspot password"
+        default ""
+        help
+            Password for the laptop hotspot.
+            This value is stored in plaintext in the generated SDK configuration.
+
+endmenu

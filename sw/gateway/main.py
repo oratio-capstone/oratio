@@ -1,0 +1,50 @@
+"""Gateway process 1: the UDP side and the WebSocket server on one asyncio loop.
+
+    python sw/gateway/main.py
+
+The two halves only talk through q_in (UDP -> WebSocket) and q_out
+(WebSocket -> UDP); see messages.py for what goes on each.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+
+import config
+import udp_devserver  # routing only; the asyncio sw/udp_server.py replaces it with the same start()
+from auth import Auth
+from event_log import EventLog
+from ws_server import WebSocketServer
+
+
+async def main() -> None:
+    logging.basicConfig(level=config.LOG_LEVEL,
+                        format="%(asctime)s %(levelname)-7s %(name)s: %(message)s")
+
+    auth = Auth.from_file(config.DASHBOARD_PASSWORD_FILE)
+    if not auth.configured:  # routing still runs; only the dashboard stays locked
+        logging.getLogger("gateway").error(
+            "No dashboard password set, so every dashboard login is refused. Set one with: "
+            "python auth.py set   (saved to %s)", config.DASHBOARD_PASSWORD_FILE)
+
+    q_in: asyncio.Queue = asyncio.Queue(maxsize=config.QUEUE_SIZE)
+    q_out: asyncio.Queue = asyncio.Queue(maxsize=config.QUEUE_SIZE)
+
+    ws = WebSocketServer(q_in, q_out, path=config.WS_PATH,
+                         client_buffer=config.CLIENT_BUFFER, alert_history=config.ALERT_HISTORY,
+                         names_file=config.NAMES_FILE,
+                         event_log=EventLog(config.EVENTS_DB, retention_days=config.EVENTS_RETENTION_DAYS),
+                         talk_timeout=config.TALK_TIMEOUT_S, talk_grace=config.TALK_GRACE_S,
+                         node_timeout=config.HEARTBEAT_TIMEOUT_S, auth=auth)
+    await ws.start(config.WS_HOST, config.WS_PORT)
+    await udp_devserver.start(q_in, q_out, config.UDP_HOST, config.UDP_PORT)
+
+    await asyncio.Event().wait()  # run until stopped (Ctrl+C or systemd)
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
