@@ -84,7 +84,7 @@ steps:
   condition: and(succeeded(), eq(variables['RUN_FW'], 'true'))
 
 - script: |
-    pio test -e esp32-s3-n8r8 -f test_157_audio_capture -f test_audio \
+    pio test -e esp32-s3-n8r8 -f test_157_audio_capture -f test_audio -f test_audio_loopback \
       --without-uploading --without-testing
   displayName: 'Compile tests: audio (esp32-s3-n8r8)'
   workingDirectory: '$(Build.SourcesDirectory)/fw'
