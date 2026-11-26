@@ -2,13 +2,37 @@
 #include "audio_common.h"
 #include "audio_output.h"
 
+#include <stdint.h>
+
 #include "esp_log.h"
 #include "freertos/task.h"
 
 static const char *TAG = "PLAYBACK";
+// Volume multiplier for every frame sent to the speaker. Raise it if playback is too quiet.
+// 1.0f = unchanged, 2.0f ~ +6 dB, 4.0f ~ +12 dB. Loud samples are clamped to the int16 range,
+// so a high gain clips the peaks.
+static const float PLAYBACK_GAIN = 2.0f;
+
 // Startup calls task_start once, after opening the driver. The caller retains
 // the input buffer for this task's lifetime and supplies exactly one producer.
 static TaskHandle_t s_task;
+
+static void apply_gain(int16_t *samples, size_t sample_count)
+{
+    for (size_t i = 0; i < sample_count; i++)
+    {
+        float scaled = (float)samples[i] * PLAYBACK_GAIN;
+        if (scaled > INT16_MAX)
+        {
+            scaled = INT16_MAX;
+        }
+        else if (scaled < INT16_MIN)
+        {
+            scaled = INT16_MIN;
+        }
+        samples[i] = (int16_t)scaled;
+    }
+}
 
 static void playback_task(void *argument)
 {
@@ -26,9 +50,13 @@ static void playback_task(void *argument)
         {
             errors++;
         }
-        else if (audio_output_write(frame.samples, frame.length) != ESP_OK)
+        else
         {
-            errors++;
+            apply_gain(frame.samples, frame.length);
+            if (audio_output_write(frame.samples, frame.length) != ESP_OK)
+            {
+                errors++;
+            }
         }
         const TickType_t now = xTaskGetTickCount();
         if (errors != 0 && now - last_log >= pdMS_TO_TICKS(2000))
