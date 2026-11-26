@@ -550,8 +550,8 @@ function dayLabel(ts) {
   return d.toLocaleDateString([], options);  // e.g. "Nov 24"
 }
 
-function clock(ts) {  // e.g. "6:42 AM"
-  return new Date(ts * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+function clock(ts) {  // e.g. "6:42:05 AM"
+  return new Date(ts * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
 }
 
 function fullTime(ts) {  // for tooltips: the exact moment, seconds included
