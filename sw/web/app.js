@@ -180,12 +180,68 @@ function setConn(text, cls) {
 
 // ---- audio -------------------------------------------------------------------
 
+const SAMPLE_RATE = 16000;     // the devices' audio format: 16 kHz, 16-bit mono PCM
+const START_DELAY_S = 0.12;    // small buffer against network jitter
+const MAX_DELAY_S = 0.5;       // further behind than this: drop frames to catch up
+const VOLUME_KEY = "oratio-listen-volume";
+let listenVolume = 2;          // 200 %: the devices' microphones are quiet
+try { listenVolume = Number(localStorage.getItem(VOLUME_KEY)) || listenVolume; } catch (e) { /* default */ }
+let listenOut = null;          // shared output: a limiter, so a loud voice at high volume doesn't distort
+
+function listenOutput() {
+  if (!listenOut) {
+    listenOut = audioCtx.createDynamicsCompressor();
+    listenOut.threshold.value = -6;
+    listenOut.ratio.value = 12;
+    listenOut.connect(audioCtx.destination);
+  }
+  return listenOut;
+}
+
+// Called from the Listen click, so the browser allows sound.
+function startPlayback(stream) {
+  unlockAudio();
+  if (!audioCtx || stream.gain) return;
+  stream.gain = audioCtx.createGain();
+  stream.gain.gain.value = listenVolume;
+  stream.gain.connect(listenOutput());
+  stream.nextTime = 0;
+}
+
+function play(stream, samples) {
+  if (!stream.gain || !audioReady() || stream.paused) return;
+  const now = audioCtx.currentTime;
+  if (stream.nextTime < now) stream.nextTime = now + START_DELAY_S;  // first frame, or after a gap
+  if (stream.nextTime - now > MAX_DELAY_S) return;                   // too far behind: skip
+  const buffer = audioCtx.createBuffer(1, samples.length, SAMPLE_RATE);
+  const channel = buffer.getChannelData(0);
+  for (let i = 0; i < samples.length; i++) channel[i] = samples[i] / 32768;
+  const source = audioCtx.createBufferSource();
+  source.buffer = buffer;
+  source.connect(stream.gain);
+  source.start(stream.nextTime);
+  stream.nextTime += buffer.duration;
+}
+
+function setListenVolume(value) {
+  listenVolume = value;
+  try { localStorage.setItem(VOLUME_KEY, String(value)); } catch (e) { /* this page only */ }
+  for (const stream of listening.values()) {
+    if (stream.gain) stream.gain.gain.value = value;
+    const slider = stream.card.querySelector(".wave-vol input");
+    if (slider) slider.value = value;
+    const label = stream.card.querySelector(".wave-vol output");
+    if (label) label.textContent = `${Math.round(value * 100)} %`;
+  }
+}
+
 // Binary frame: 2-byte big-endian node id, then 16-bit little-endian PCM samples.
 function onAudio(buffer) {
   const id = new DataView(buffer).getUint16(0);
   const stream = listening.get(id);
   if (!stream) return;
   const samples = new Int16Array(buffer, 2, (buffer.byteLength - 2) >> 1);
+  play(stream, samples);
   let sumSquares = 0;
   for (let i = 0; i < samples.length; i++) sumSquares += samples[i] * samples[i];
   const rms = Math.sqrt(sumSquares / Math.max(1, samples.length)) / 32768;
@@ -210,8 +266,10 @@ function toggleListen(id, emergency = false) {
     openEmergencyDialog(id);
     return;
   } else {
-    listening.set(id, { frames: 0, levels: new Float32Array(WAVE_HISTORY), head: 0, lastFrameAt: 0,
-                        emergency, paused: false, card: makeWaveCard(id, emergency) });
+    const stream = { frames: 0, levels: new Float32Array(WAVE_HISTORY), head: 0, lastFrameAt: 0,
+                     emergency, paused: false, card: makeWaveCard(id, emergency), gain: null, nextTime: 0 };
+    listening.set(id, stream);
+    startPlayback(stream);
     send({ type: "listen", node_id: id, emergency });
     requestAnimationFrame(drawWaves);
   }
@@ -221,6 +279,7 @@ function toggleListen(id, emergency = false) {
 function endStream(id) {
   const stream = listening.get(id);
   if (!stream) return;
+  if (stream.gain) stream.gain.disconnect();  // silences anything still scheduled
   stream.card.remove();
   listening.delete(id);
   scheduleRender();
@@ -264,9 +323,14 @@ function makeWaveCard(id, emergency) {
       <strong class="wave-name"></strong>
       ${emergency ? '<span class="tag-emergency">Emergency listen</span>' : ""}
       <span class="wave-stat muted"></span>
+      <label class="wave-vol" title="Listening volume (all streams, remembered in this browser)">
+        Volume <input type="range" min="0" max="4" step="0.1" value="${listenVolume}">
+        <output>${Math.round(listenVolume * 100)} %</output>
+      </label>
       <button data-node="${id}">Stop</button>
     </div>
     <canvas class="wave"></canvas>`;
+  card.querySelector(".wave-vol input").addEventListener("input", (e) => setListenVolume(Number(e.target.value)));
   $("waves").appendChild(card);
   $("listening-section").hidden = false;
   return card;

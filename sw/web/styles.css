@@ -46,7 +46,10 @@ button.on { border-color: var(--accent); color: var(--accent); }
 #waves { display: grid; gap: 12px; }
 .wave-card { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
 .wave-head { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
-.wave-head button { margin-left: auto; }
+.wave-head button { margin-left: 0; }
+.wave-vol { margin-left: auto; display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+.wave-vol input { width: 110px; accent-color: var(--accent); }
+.wave-vol output { min-width: 42px; font-variant-numeric: tabular-nums; }
 .wave { display: block; width: 100%; height: 72px; }
 [hidden] { display: none !important; }
 #sound { margin-left: auto; font-size: 13px; }
