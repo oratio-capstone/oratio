@@ -11,18 +11,18 @@ Header, 7 bytes, big-endian (the firmware's network.c, and sw/udp_server.py):
     bytes 5-6   payload length in bytes; must equal the bytes that follow
     bytes 7..   payload (depends on the type)
 
-Heartbeat payload, POC firmware (sent today), 1 byte:
-
-    byte 7        RSSI to its upstream link in dBm, signed (the root: to the hotspot/AP;
-                  other nodes: to their mesh parent); 127 = not available
-
-Heartbeat payload agreed for after the POC, 15 bytes:
+Heartbeat payload, 15 bytes (current firmware; older POC builds sent only byte 9, the RSSI,
+as a 1-byte payload, which the gateway still accepts):
 
     byte 7        role: 0 = worker (worn by a person), 1 = relay (fixed in place)
     byte 8        mesh level, root = 1                   esp_mesh_lite_get_level()
     byte 9        RSSI to parent in dBm, signed           esp_wifi_sta_get_ap_info()
     bytes 10-15   parent's BSSID (its SoftAP MAC)        esp_wifi_sta_get_ap_info()
     bytes 16-21   this node's own SoftAP MAC             esp_wifi_get_mac(WIFI_IF_AP)
+
+RSSI 127 = not available, and an all-zero parent BSSID = no parent yet (both while joining).
+The root and nodes built with "Fixed relay node" (menuconfig) report role 1; the root's
+parent is the hotspot or the Pi's access point.
 
 The gateway matches each node's parent BSSID to the node with that SoftAP MAC,
 which gives the mesh tree. A level-1 node's parent is the Pi's access point.
@@ -32,7 +32,7 @@ What the firmware sends today (POC) vs. later. Update this when the firmware cha
     header        in use
     'A' audio     in use. While a node sends audio it skips heartbeats (any packet proves it is alive),
                   so the gateway must count audio as liveness too
-    'H' heartbeat in use, with the 1-byte RSSI payload; the 15-byte telemetry comes after the POC
+    'H' heartbeat in use, with the 15-byte payload above (topology, Near, Link)
                   (sent only when the node has sent nothing else for 1 s)
     'T' telemetry firmware test data; the gateway ignores it
     'S' SOS       after the POC
@@ -72,6 +72,7 @@ CONTROL_EMERGENCY = 0x02
 HEARTBEAT = struct.Struct(">BBb6s6s")
 RSSI_ONLY = struct.Struct(">b")  # the POC firmware's heartbeat payload
 RSSI_UNAVAILABLE = 127
+NO_PARENT = bytes(6)  # all-zero parent BSSID: the node has no parent yet
 ROLE_WORKER = 0
 ROLE_RELAY = 1
 ROLES = {ROLE_WORKER: "worker", ROLE_RELAY: "relay"}
@@ -138,7 +139,8 @@ def parse_heartbeat(payload: bytes) -> Heartbeat | None:
     if len(payload) < HEARTBEAT.size:
         return None
     role, level, rssi, parent, own = HEARTBEAT.unpack_from(payload)
-    return Heartbeat(ROLES.get(role, "worker"), level, rssi, mac_str(parent), mac_str(own))
+    return Heartbeat(ROLES.get(role, "worker"), level, None if rssi == RSSI_UNAVAILABLE else rssi,
+                     None if parent == NO_PARENT else mac_str(parent), mac_str(own))
 
 
 def build_heartbeat(role: str, level: int, rssi: int, parent_mac: str, mac: str) -> bytes:
