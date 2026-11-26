@@ -37,14 +37,28 @@ typedef enum
 #define ORATIO_HEADER_SIZE 7
 #define ORATIO_MAX_PAYLOAD_SIZE 640
 
-/* Heartbeat payload[0]: signed int8 RSSI in dBm, or 127 when unavailable.
- * An empty legacy heartbeat is still accepted. Root measures hotspot; nodes parent.
+/* Heartbeat: role, level, signed RSSI, parent BSSID, own SoftAP MAC.
+ * Offsets are relative to the payload (wire offsets are seven bytes greater).
+ * Without a parent, report RSSI 127 and an all-zero parent BSSID.
+ * The root reports relay role; non-root roles are selected in menuconfig.
+ * Empty and one-byte legacy heartbeat payloads are no longer accepted.
  */
 enum
 {
-    ORATIO_HEARTBEAT_PAYLOAD_SIZE = 1,
+    ORATIO_ROLE_WORKER = 0,
+    ORATIO_ROLE_RELAY = 1,
+    ORATIO_MAC_BYTES = 6,
+    ORATIO_HEARTBEAT_ROLE_OFFSET = 0,
+    ORATIO_HEARTBEAT_LEVEL_OFFSET = 1,
+    ORATIO_HEARTBEAT_RSSI_OFFSET = 2,
+    ORATIO_HEARTBEAT_PARENT_MAC_OFFSET = 3,
+    ORATIO_HEARTBEAT_SOFTAP_MAC_OFFSET = 9,
+    ORATIO_HEARTBEAT_PAYLOAD_SIZE = 15,
     ORATIO_RSSI_UNAVAILABLE = 127
 };
+
+_Static_assert(ORATIO_HEARTBEAT_SOFTAP_MAC_OFFSET + ORATIO_MAC_BYTES == ORATIO_HEARTBEAT_PAYLOAD_SIZE,
+               "Heartbeat MAC fields must fill the 15-byte payload");
 
 typedef struct
 {

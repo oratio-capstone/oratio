@@ -14,4 +14,13 @@ menu "Oratio Network Configuration"
             Password for the laptop hotspot.
             This value is stored in plaintext in the generated SDK configuration.
 
+    config ORATIO_IS_RELAY
+        bool "Fixed relay node"
+        default n
+        help
+            Enable for a stationary non-root relay. Leave disabled for a worker.
+            The root always reports relay role regardless of this setting.
+            This sets heartbeat identity only; it does not change audio tasks
+            or the mesh level selected by the firmware role.
+
 endmenu

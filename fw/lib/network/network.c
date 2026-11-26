@@ -68,6 +68,12 @@ static const char ORATIO_SERVER_IP[] = "192.168.137.1";
 
 static const char *TAG = "MESH_NETWORK";
 static const bool IS_ROOT = (APP_IS_ROOT == 1);
+/* Identity metadata is independent of audio capability and current mesh level. */
+#if APP_IS_ROOT || defined(CONFIG_ORATIO_IS_RELAY)
+static const uint8_t NODE_ROLE = ORATIO_ROLE_RELAY;
+#else
+static const uint8_t NODE_ROLE = ORATIO_ROLE_WORKER;
+#endif
 static const uint8_t ROOT_LEVEL = 1;
 
 /* Initial SoftAP channel; the upstream connection may determine the operating channel later. */
@@ -142,8 +148,7 @@ static void network_connection_event(void *arg, esp_event_base_t event_base, int
         atomic_store_explicit(&s_network_connected, true, memory_order_relaxed);
         return;
     }
-    if ((event_base == WIFI_EVENT &&
-         (event_id == WIFI_EVENT_STA_DISCONNECTED || event_id == WIFI_EVENT_STA_STOP)) ||
+    if ((event_base == WIFI_EVENT && (event_id == WIFI_EVENT_STA_DISCONNECTED || event_id == WIFI_EVENT_STA_STOP)) ||
         (event_base == IP_EVENT && event_id == IP_EVENT_STA_LOST_IP))
     {
         atomic_store_explicit(&s_network_connected, false, memory_order_relaxed);
@@ -156,14 +161,14 @@ static esp_err_t network_connection_events_init(void)
     esp_event_handler_instance_t wifi_handler = NULL;
     esp_event_handler_instance_t ip_handler = NULL;
     atomic_store_explicit(&s_network_connected, false, memory_order_relaxed);
-    esp_err_t result = esp_event_handler_instance_register(
-        WIFI_EVENT, ESP_EVENT_ANY_ID, network_connection_event, NULL, &wifi_handler);
+    esp_err_t result = esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, network_connection_event, NULL,
+                                                           &wifi_handler);
     if (result != ESP_OK)
     {
         return result;
     }
-    result = esp_event_handler_instance_register(
-        IP_EVENT, ESP_EVENT_ANY_ID, network_connection_event, NULL, &ip_handler);
+    result =
+        esp_event_handler_instance_register(IP_EVENT, ESP_EVENT_ANY_ID, network_connection_event, NULL, &ip_handler);
     if (result != ESP_OK)
     {
         /* Leave no partially installed subscription if the second registration fails. */
@@ -339,8 +344,8 @@ void mesh_network_log_status(void)
 /* Call only after checking the output capacity and packet fields.
  * All encoders use the same seven-byte, big-endian header layout.
  */
-static void network_write_packet_header(
-    uint8_t *buffer, uint8_t type, uint16_t node_id, uint16_t sequence, uint16_t length)
+static void network_write_packet_header(uint8_t *buffer, uint8_t type, uint16_t node_id, uint16_t sequence,
+                                        uint16_t length)
 {
     buffer[0] = type;
     buffer[1] = (uint8_t)(node_id >> 8);
@@ -378,9 +383,11 @@ esp_err_t oratio_packet_encode(const oratio_packet_t *packet, uint8_t *buffer, s
         ESP_LOGD(TAG, "Packet length exceeds maximum: %u", (unsigned int)packet->length);
         return ESP_ERR_INVALID_ARG;
     }
-    else if (packet->type == ORATIO_PACKET_HEARTBEAT && packet->length > ORATIO_HEARTBEAT_PAYLOAD_SIZE)
+    else if (packet->type == ORATIO_PACKET_HEARTBEAT &&
+             (packet->length != ORATIO_HEARTBEAT_PAYLOAD_SIZE ||
+              packet->payload[ORATIO_HEARTBEAT_ROLE_OFFSET] > ORATIO_ROLE_RELAY))
     {
-        ESP_LOGD(TAG, "Heartbeat payload must be empty or contain one RSSI byte");
+        ESP_LOGD(TAG, "Heartbeat requires 15 payload bytes and a worker/relay role");
         return ESP_ERR_INVALID_ARG;
     }
     else if (buffer_capacity < ORATIO_HEADER_SIZE + packet->length)
@@ -432,13 +439,19 @@ static esp_err_t network_read_packet_header(const uint8_t *buffer, size_t receiv
     {
         return ESP_ERR_INVALID_SIZE;
     }
-    if (header->type == ORATIO_PACKET_HEARTBEAT && header->length > ORATIO_HEARTBEAT_PAYLOAD_SIZE)
+    if (header->type == ORATIO_PACKET_HEARTBEAT && header->length != ORATIO_HEARTBEAT_PAYLOAD_SIZE)
     {
         return ESP_ERR_INVALID_ARG;
     }
     if (received_length != ORATIO_HEADER_SIZE + header->length)
     {
         return ESP_ERR_INVALID_SIZE;
+    }
+    /* Validate the role only after the complete payload is known to be present. */
+    if (header->type == ORATIO_PACKET_HEARTBEAT &&
+        buffer[ORATIO_HEADER_SIZE + ORATIO_HEARTBEAT_ROLE_OFFSET] > ORATIO_ROLE_RELAY)
+    {
+        return ESP_ERR_INVALID_ARG;
     }
     return ESP_OK;
 }
@@ -534,6 +547,7 @@ typedef struct
     struct sockaddr_in server_address;
     uint16_t node_id;
     uint16_t heartbeat_sequence;
+    uint8_t softap_mac[ORATIO_MAC_BYTES];
     TickType_t last_activity;
 } network_context_t;
 
@@ -559,6 +573,13 @@ static esp_err_t network_context_init(network_context_t *context)
     }
 
     context->node_id = ((uint16_t)station_mac[4] << 8) | (uint16_t)station_mac[5];
+    /* Interface MACs are fixed after Wi-Fi setup; cache our SoftAP identity once. */
+    result = esp_wifi_get_mac(WIFI_IF_AP, context->softap_mac);
+    if (result != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Failed to read SoftAP MAC: %s", esp_err_to_name(result));
+        return result;
+    }
     return ESP_OK;
 }
 
@@ -693,6 +714,24 @@ static bool network_is_heartbeat_due(const network_context_t *context)
     return elapsed >= pdMS_TO_TICKS(HEARTBEAT_INTERVAL_MS);
 }
 
+/* Fill the caller's zero-initialized payload directly, without an intermediate
+ * packet copy. Parent information is refreshed for every heartbeat after roaming.
+ */
+static void network_write_heartbeat_payload(uint8_t *payload, const network_context_t *context)
+{
+    payload[ORATIO_HEARTBEAT_ROLE_OFFSET] = NODE_ROLE;
+    payload[ORATIO_HEARTBEAT_LEVEL_OFFSET] = esp_mesh_lite_get_level();
+    payload[ORATIO_HEARTBEAT_RSSI_OFFSET] = ORATIO_RSSI_UNAVAILABLE;
+    memcpy(payload + ORATIO_HEARTBEAT_SOFTAP_MAC_OFFSET, context->softap_mac, ORATIO_MAC_BYTES);
+
+    wifi_ap_record_t upstream = {0};
+    if (esp_wifi_sta_get_ap_info(&upstream) == ESP_OK)
+    {
+        payload[ORATIO_HEARTBEAT_RSSI_OFFSET] = (uint8_t)upstream.rssi;
+        memcpy(payload + ORATIO_HEARTBEAT_PARENT_MAC_OFFSET, upstream.bssid, ORATIO_MAC_BYTES);
+    }
+}
+
 static esp_err_t network_process_heartbeat(network_context_t *context)
 {
     if (!network_is_heartbeat_due(context))
@@ -700,17 +739,11 @@ static esp_err_t network_process_heartbeat(network_context_t *context)
         return ESP_OK;
     }
 
-    /* Snapshot the direct upstream link; never reuse an RSSI from an old parent. */
-    wifi_ap_record_t upstream = {0};
-    int8_t rssi = ORATIO_RSSI_UNAVAILABLE;
-    if (esp_wifi_sta_get_ap_info(&upstream) == ESP_OK)
-    {
-        rssi = upstream.rssi;
-    }
     uint8_t heartbeat[ORATIO_HEADER_SIZE + ORATIO_HEARTBEAT_PAYLOAD_SIZE] = {0};
-    network_write_packet_header(heartbeat, ORATIO_PACKET_HEARTBEAT, context->node_id,
-                                context->heartbeat_sequence, ORATIO_HEARTBEAT_PAYLOAD_SIZE);
-    heartbeat[ORATIO_HEADER_SIZE] = (uint8_t)rssi;
+    network_write_packet_header(heartbeat, ORATIO_PACKET_HEARTBEAT, context->node_id, context->heartbeat_sequence,
+                                ORATIO_HEARTBEAT_PAYLOAD_SIZE);
+    uint8_t *payload = heartbeat + ORATIO_HEADER_SIZE;
+    network_write_heartbeat_payload(payload, context);
 
     uint16_t sent_sequence = context->heartbeat_sequence;
     esp_err_t result = network_socket_send(context, heartbeat, sizeof(heartbeat));
@@ -720,8 +753,9 @@ static esp_err_t network_process_heartbeat(network_context_t *context)
     }
 
     context->heartbeat_sequence++;
-    ESP_LOGD(TAG, "Heartbeat sent, sequence: %u upstream RSSI=%d (127=unavailable)",
-             (unsigned int)sent_sequence, (int)rssi);
+    ESP_LOGD(TAG, "Heartbeat sent: sequence=%u role=%u level=%u upstream RSSI=%d (127=unavailable)",
+             (unsigned int)sent_sequence, (unsigned int)payload[ORATIO_HEARTBEAT_ROLE_OFFSET],
+             (unsigned int)payload[ORATIO_HEARTBEAT_LEVEL_OFFSET], (int)(int8_t)payload[ORATIO_HEARTBEAT_RSSI_OFFSET]);
 #if ORATIO_NETWORK_DEBUG
     mesh_network_log_status();
 #endif
@@ -789,13 +823,14 @@ static esp_err_t network_process_receive(network_context_t *context)
     }
     if (header.type == ORATIO_PACKET_HEARTBEAT)
     {
-        int8_t rssi = ORATIO_RSSI_UNAVAILABLE;
-        if (header.length == ORATIO_HEARTBEAT_PAYLOAD_SIZE)
-        {
-            rssi = (int8_t)receive_buffer[ORATIO_HEADER_SIZE];
-        }
-        ESP_LOGD(TAG, "Heartbeat received: node=%04x sequence=%u upstream RSSI=%d (127=unavailable)",
-                 (unsigned int)header.node_id, (unsigned int)header.sequence, (int)rssi);
+        const uint8_t *payload = receive_buffer + ORATIO_HEADER_SIZE;
+        ESP_LOGD(TAG,
+                 "Heartbeat received: node=%04x sequence=%u role=%u level=%u "
+                 "upstream RSSI=%d (127=unavailable)",
+                 (unsigned int)header.node_id, (unsigned int)header.sequence,
+                 (unsigned int)payload[ORATIO_HEARTBEAT_ROLE_OFFSET],
+                 (unsigned int)payload[ORATIO_HEARTBEAT_LEVEL_OFFSET],
+                 (int)(int8_t)payload[ORATIO_HEARTBEAT_RSSI_OFFSET]);
         return ESP_OK;
     }
     if (header.type != ORATIO_PACKET_AUDIO)

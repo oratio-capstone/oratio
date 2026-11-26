@@ -14,55 +14,72 @@ void tearDown(void)
 {
 }
 
+/* Independent wire fixture: worker, level 2, -60 dBm, parent AP, own AP. */
+static const uint8_t HEARTBEAT_WIRE[] =
+{
+    'H', 0x12, 0x34, 0x01, 0x02, 0x00, 0x0F,
+    0x00, 0x02, 0xC4,
+    0x80, 0x45, 0x6B, 0x2D, 0x25, 0x05,
+    0x80, 0x45, 0x6B, 0x2D, 0x12, 0x35
+};
+
 static void test_encode_heartbeat(void)
 {
-    /* Arrange inputs, call the encoder, then check its output. */
-    oratio_packet_t packet = {.type = ORATIO_PACKET_HEARTBEAT, .node_id = 0x1234, .sequence = 0x0102, .length = 0};
-
-    uint8_t buffer[ORATIO_HEADER_SIZE] = {0};
-    size_t encoded_length = 0;
-
-    const uint8_t expected[] = {'H', 0x12, 0x34, 0x01, 0x02, 0x00, 0x00};
-
-    esp_err_t result = oratio_packet_encode(&packet, buffer, sizeof(buffer), &encoded_length);
-
-    TEST_ASSERT_EQUAL(ESP_OK, result);
-    TEST_ASSERT_EQUAL_UINT32(sizeof(expected), encoded_length);
-    TEST_ASSERT_EQUAL_UINT8_ARRAY(expected, buffer, sizeof(expected));
-}
-
-/* Known wire bytes verify that negative RSSI remains a signed one-byte value. */
-static void test_encode_heartbeat_rssi(void)
-{
-    oratio_packet_t packet = {
-        .type = ORATIO_PACKET_HEARTBEAT, .node_id = 0x1234, .sequence = 0x0102,
-        .length = ORATIO_HEARTBEAT_PAYLOAD_SIZE, .payload = {0xE9}};
-    uint8_t buffer[ORATIO_HEADER_SIZE + ORATIO_HEARTBEAT_PAYLOAD_SIZE] = {0};
-    const uint8_t expected[] = {'H', 0x12, 0x34, 0x01, 0x02, 0, 1, 0xE9};
+    oratio_packet_t packet =
+    {
+        .type = ORATIO_PACKET_HEARTBEAT,
+        .node_id = 0x1234,
+        .sequence = 0x0102,
+        .length = ORATIO_HEARTBEAT_PAYLOAD_SIZE,
+        .payload =
+        {
+            0x00, 0x02, 0xC4,
+            0x80, 0x45, 0x6B, 0x2D, 0x25, 0x05,
+            0x80, 0x45, 0x6B, 0x2D, 0x12, 0x35
+        }
+    };
+    uint8_t buffer[ORATIO_HEADER_SIZE + ORATIO_HEARTBEAT_PAYLOAD_SIZE + 2];
+    memset(buffer, 0xA5, sizeof(buffer));
     size_t length = 0;
-    TEST_ASSERT_EQUAL(ESP_OK, oratio_packet_encode(&packet, buffer, sizeof(buffer), &length));
-    TEST_ASSERT_EQUAL_UINT32(sizeof(expected), length);
-    TEST_ASSERT_EQUAL_UINT8_ARRAY(expected, buffer, sizeof(expected));
+    TEST_ASSERT_EQUAL(ESP_OK, oratio_packet_encode(&packet, buffer + 1, sizeof(buffer) - 2, &length));
+    TEST_ASSERT_EQUAL_UINT32(22, length);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(HEARTBEAT_WIRE, buffer + 1, sizeof(HEARTBEAT_WIRE));
+    TEST_ASSERT_EQUAL_HEX8(0xA5, buffer[0]);
+    TEST_ASSERT_EQUAL_HEX8(0xA5, buffer[sizeof(buffer) - 1]);
 }
 
-static void test_decode_heartbeat_rssi(void)
+static void test_decode_heartbeat(void)
 {
-    const uint8_t buffer[] = {'H', 0x12, 0x34, 0x01, 0x02, 0, 1, 0xE9};
     oratio_packet_t packet = {0};
-    TEST_ASSERT_EQUAL(ESP_OK, oratio_packet_decode(buffer, sizeof(buffer), &packet));
+    TEST_ASSERT_EQUAL(ESP_OK, oratio_packet_decode(HEARTBEAT_WIRE, sizeof(HEARTBEAT_WIRE), &packet));
     TEST_ASSERT_EQUAL(ORATIO_PACKET_HEARTBEAT, packet.type);
     TEST_ASSERT_EQUAL_HEX16(0x1234, packet.node_id);
     TEST_ASSERT_EQUAL_HEX16(0x0102, packet.sequence);
-    TEST_ASSERT_EQUAL_UINT16(1, packet.length);
-    TEST_ASSERT_EQUAL_INT8(-23, (int8_t)packet.payload[0]);
+    TEST_ASSERT_EQUAL_UINT16(15, packet.length);
+    TEST_ASSERT_EQUAL_UINT8(ORATIO_ROLE_WORKER, packet.payload[ORATIO_HEARTBEAT_ROLE_OFFSET]);
+    TEST_ASSERT_EQUAL_UINT8(2, packet.payload[ORATIO_HEARTBEAT_LEVEL_OFFSET]);
+    TEST_ASSERT_EQUAL_INT8(-60, (int8_t)packet.payload[ORATIO_HEARTBEAT_RSSI_OFFSET]);
+    const uint8_t parent[] = {0x80, 0x45, 0x6B, 0x2D, 0x25, 0x05};
+    const uint8_t own[] = {0x80, 0x45, 0x6B, 0x2D, 0x12, 0x35};
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(parent, packet.payload + ORATIO_HEARTBEAT_PARENT_MAC_OFFSET, sizeof(parent));
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(own, packet.payload + ORATIO_HEARTBEAT_SOFTAP_MAC_OFFSET, sizeof(own));
 }
 
-static void test_heartbeat_rssi_unavailable(void)
+static void test_heartbeat_relay_round_trip(void)
 {
-    const uint8_t buffer[] = {'H', 0, 1, 0, 2, 0, 1, 0x7F};
+    uint8_t buffer[sizeof(HEARTBEAT_WIRE)];
+    memcpy(buffer, HEARTBEAT_WIRE, sizeof(buffer));
+    buffer[3] = 0xFF;
+    buffer[4] = 0xFF;
+    buffer[7] = ORATIO_ROLE_RELAY;
+    buffer[8] = 1;
+    buffer[9] = 0xE9; /* -23 dBm */
     oratio_packet_t packet = {0};
     TEST_ASSERT_EQUAL(ESP_OK, oratio_packet_decode(buffer, sizeof(buffer), &packet));
-    TEST_ASSERT_EQUAL_INT8(ORATIO_RSSI_UNAVAILABLE, (int8_t)packet.payload[0]);
+    TEST_ASSERT_EQUAL_HEX16(0xFFFF, packet.sequence);
+    TEST_ASSERT_EQUAL_UINT8(ORATIO_ROLE_RELAY, packet.payload[ORATIO_HEARTBEAT_ROLE_OFFSET]);
+    TEST_ASSERT_EQUAL_UINT8(1, packet.payload[ORATIO_HEARTBEAT_LEVEL_OFFSET]);
+    TEST_ASSERT_EQUAL_INT8(-23, (int8_t)packet.payload[ORATIO_HEARTBEAT_RSSI_OFFSET]);
     uint8_t encoded[sizeof(buffer)] = {0};
     size_t length = 0;
     TEST_ASSERT_EQUAL(ESP_OK, oratio_packet_encode(&packet, encoded, sizeof(encoded), &length));
@@ -70,19 +87,75 @@ static void test_heartbeat_rssi_unavailable(void)
     TEST_ASSERT_EQUAL_UINT8_ARRAY(buffer, encoded, sizeof(buffer));
 }
 
-static void test_decode_heartbeat(void)
+static void test_heartbeat_rssi_unavailable(void)
 {
-    const uint8_t buffer[] = {'H', 0x12, 0x34, 0x01, 0x02, 0x00, 0x00};
-
+    /* No upstream association: level zero, RSSI sentinel and zero parent BSSID. */
+    const uint8_t buffer[] =
+    {
+        'H', 0x12, 0x34, 0, 2, 0, 15,
+        0, 0, 0x7F,
+        0, 0, 0, 0, 0, 0,
+        0x80, 0x45, 0x6B, 0x2D, 0x12, 0x35
+    };
     oratio_packet_t packet = {0};
+    TEST_ASSERT_EQUAL(ESP_OK, oratio_packet_decode(buffer, sizeof(buffer), &packet));
+    TEST_ASSERT_EQUAL_INT8(ORATIO_RSSI_UNAVAILABLE, (int8_t)packet.payload[ORATIO_HEARTBEAT_RSSI_OFFSET]);
+    TEST_ASSERT_EACH_EQUAL_UINT8(0, packet.payload + ORATIO_HEARTBEAT_PARENT_MAC_OFFSET, ORATIO_MAC_BYTES);
+    uint8_t encoded[sizeof(buffer)] = {0};
+    size_t length = 0;
+    TEST_ASSERT_EQUAL(ESP_OK, oratio_packet_encode(&packet, encoded, sizeof(encoded), &length));
+    TEST_ASSERT_EQUAL_UINT32(sizeof(buffer), length);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(buffer, encoded, sizeof(buffer));
+}
 
-    /* Decode, then check the result and each field. */
-    esp_err_t result = oratio_packet_decode(buffer, sizeof(buffer), &packet);
-    TEST_ASSERT_EQUAL(ESP_OK, result);
-    TEST_ASSERT_EQUAL(ORATIO_PACKET_HEARTBEAT, packet.type);
-    TEST_ASSERT_EQUAL(0x1234, packet.node_id);
-    TEST_ASSERT_EQUAL(0x0102, packet.sequence);
-    TEST_ASSERT_EQUAL(0, packet.length);
+static void test_heartbeat_rssi_boundaries(void)
+{
+    const int8_t values[] = {INT8_MIN, -1, 0, INT8_MAX};
+    for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); i++)
+    {
+        uint8_t buffer[sizeof(HEARTBEAT_WIRE)];
+        memcpy(buffer, HEARTBEAT_WIRE, sizeof(buffer));
+        buffer[9] = (uint8_t)values[i];
+        oratio_packet_t packet = {0};
+        TEST_ASSERT_EQUAL(ESP_OK, oratio_packet_decode(buffer, sizeof(buffer), &packet));
+        TEST_ASSERT_EQUAL_INT8(values[i], (int8_t)packet.payload[ORATIO_HEARTBEAT_RSSI_OFFSET]);
+        uint8_t encoded[sizeof(buffer)] = {0};
+        size_t length = 0;
+        TEST_ASSERT_EQUAL(ESP_OK, oratio_packet_encode(&packet, encoded, sizeof(encoded), &length));
+        TEST_ASSERT_EQUAL_UINT8_ARRAY(buffer, encoded, sizeof(buffer));
+    }
+}
+
+static void test_heartbeat_invalid_role(void)
+{
+    uint8_t buffer[sizeof(HEARTBEAT_WIRE)];
+    memcpy(buffer, HEARTBEAT_WIRE, sizeof(buffer));
+    buffer[7] = 2;
+    oratio_packet_t packet;
+    memset(&packet, 0xA5, sizeof(packet));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, oratio_packet_decode(buffer, sizeof(buffer), &packet));
+    TEST_ASSERT_EQUAL_HEX16(0xA5A5, packet.length);
+    packet.type = ORATIO_PACKET_HEARTBEAT;
+    packet.length = ORATIO_HEARTBEAT_PAYLOAD_SIZE;
+    packet.payload[ORATIO_HEARTBEAT_ROLE_OFFSET] = 2;
+    memset(buffer, 0xA5, sizeof(buffer));
+    size_t length = 123;
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, oratio_packet_encode(&packet, buffer, sizeof(buffer), &length));
+    TEST_ASSERT_EQUAL_UINT32(0, length);
+    TEST_ASSERT_EACH_EQUAL_UINT8(0xA5, buffer, sizeof(buffer));
+}
+
+static void test_heartbeat_truncated_or_trailing(void)
+{
+    uint8_t buffer[sizeof(HEARTBEAT_WIRE) + 1];
+    memcpy(buffer, HEARTBEAT_WIRE, sizeof(HEARTBEAT_WIRE));
+    buffer[sizeof(HEARTBEAT_WIRE)] = 0xAA;
+    oratio_packet_t packet = {0};
+    for (size_t length = 0; length < sizeof(HEARTBEAT_WIRE); length++)
+    {
+        TEST_ASSERT_EQUAL(ESP_ERR_INVALID_SIZE, oratio_packet_decode(buffer, length, &packet));
+    }
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_SIZE, oratio_packet_decode(buffer, sizeof(buffer), &packet));
 }
 
 static void test_encode_telemetry_payload(void)
@@ -144,12 +217,20 @@ static void test_decode_invalid_length(void)
 
 static void test_decode_heartbeat_with_invalid_payload_size(void)
 {
-    const uint8_t buffer[] = {'H', 0x12, 0x34, 0x01, 0x02, 0x00, 0x02, 0xE9, 0x00};
-
+    uint8_t buffer[ORATIO_HEADER_SIZE + ORATIO_MAX_PAYLOAD_SIZE] = {'H', 0x12, 0x34, 0x01, 0x02};
     oratio_packet_t packet = {0};
-
-    esp_err_t result = oratio_packet_decode(buffer, sizeof(buffer), &packet);
-    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, result);
+    /* Includes empty and RSSI-only legacy packets, and every oversized heartbeat. */
+    for (uint16_t length = 0; length <= ORATIO_MAX_PAYLOAD_SIZE; length++)
+    {
+        if (length == ORATIO_HEARTBEAT_PAYLOAD_SIZE)
+        {
+            continue;
+        }
+        buffer[5] = (uint8_t)(length >> 8);
+        buffer[6] = (uint8_t)length;
+        TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG,
+                          oratio_packet_decode(buffer, ORATIO_HEADER_SIZE + length, &packet));
+    }
 }
 
 static void test_decode_short_header(void)
@@ -183,11 +264,21 @@ static void test_encode_oversized_payload(void)
 
 static void test_encode_heartbeat_with_invalid_payload_size(void)
 {
-    oratio_packet_t packet = {.type = ORATIO_PACKET_HEARTBEAT, .length = 2};
-    uint8_t buffer[ORATIO_HEADER_SIZE + 2];
-    size_t length = 123;
-    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, oratio_packet_encode(&packet, buffer, sizeof(buffer), &length));
-    TEST_ASSERT_EQUAL_UINT32(0, length);
+    oratio_packet_t packet = {.type = ORATIO_PACKET_HEARTBEAT};
+    uint8_t buffer[ORATIO_HEADER_SIZE + ORATIO_MAX_PAYLOAD_SIZE];
+    memset(buffer, 0xA5, sizeof(buffer));
+    for (uint16_t payload_length = 0; payload_length <= ORATIO_MAX_PAYLOAD_SIZE; payload_length++)
+    {
+        if (payload_length == ORATIO_HEARTBEAT_PAYLOAD_SIZE)
+        {
+            continue;
+        }
+        packet.length = payload_length;
+        size_t length = 123;
+        TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, oratio_packet_encode(&packet, buffer, sizeof(buffer), &length));
+        TEST_ASSERT_EQUAL_UINT32(0, length);
+    }
+    TEST_ASSERT_EACH_EQUAL_UINT8(0xA5, buffer, sizeof(buffer));
 }
 
 static void test_encode_insufficient_capacity(void)
@@ -295,7 +386,7 @@ static void test_decode_maximum_audio_payload(void)
 static void test_zero_header_values_and_empty_payloads(void)
 {
     /* No minimum payload size has been specified for audio or telemetry. */
-    const uint8_t types[] = {'A', 'T', 'H'};
+    const uint8_t types[] = {'A', 'T'};
     for (size_t i = 0; i < sizeof(types); ++i)
     {
         const uint8_t expected[] = {types[i], 0, 0, 0, 0, 0, 0};
@@ -464,10 +555,12 @@ void app_main(void)
     ESP_LOGI(TAG, "Starting protocol and message-buffer tests");
     UNITY_BEGIN();
     RUN_TEST(test_encode_heartbeat);
-    RUN_TEST(test_encode_heartbeat_rssi);
-    RUN_TEST(test_decode_heartbeat_rssi);
-    RUN_TEST(test_heartbeat_rssi_unavailable);
     RUN_TEST(test_decode_heartbeat);
+    RUN_TEST(test_heartbeat_relay_round_trip);
+    RUN_TEST(test_heartbeat_rssi_unavailable);
+    RUN_TEST(test_heartbeat_rssi_boundaries);
+    RUN_TEST(test_heartbeat_invalid_role);
+    RUN_TEST(test_heartbeat_truncated_or_trailing);
     RUN_TEST(test_encode_telemetry_payload);
     RUN_TEST(test_decode_telemetry_payload);
     RUN_TEST(test_decode_invalid_packet_type);
