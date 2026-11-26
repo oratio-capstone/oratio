@@ -11,7 +11,9 @@ understanding (decoding heartbeats, liveness, topology, SOS) is on the WebSocket
 Q in  (UDP -> WebSocket)
     {"type": "packet", "node_id": int, "kind": "H"|"S"|"P"|"T"|..., "seq": int,
      "payload": bytes, "addr": "ip:port", "ts": float}
-                                     every packet that is not audio, raw (header split off)
+                                     every packet that is not audio, raw (header split off);
+                                     audio also appears here, at most once a second per node with
+                                     an empty payload, only so the node counts as alive while talking
     ("audio", node_id, pcm_bytes)    a tuple, kept light because it arrives 50 times a second per talker;
                                      only sent for nodes a dashboard is listening to
 

@@ -39,6 +39,12 @@ def test_heartbeat_telemetry():
     assert hb == ("relay", 2, -61, "02:00:00:00:00:01", "02:00:00:00:00:0a")
     assert hb.role == "relay" and hb.rssi == -61
     assert protocol.parse_heartbeat(b"") is None
+    assert protocol.parse_heartbeat(bytes([0xBF])) == (None, None, -65, None, None)   # POC: RSSI only
+    assert protocol.parse_heartbeat(bytes([127])).rssi is None                       # not available
+    joining = protocol.build_heartbeat("relay", 1, 0, "00:00:00:00:00:00", "02:00:00:00:00:01")
+    joining = joining[:2] + bytes([127]) + joining[3:]               # no parent yet: RSSI 127, zero BSSID
+    hb = protocol.parse_heartbeat(joining)
+    assert (hb.role, hb.level, hb.rssi, hb.parent_mac) == ("relay", 1, None, None)
     assert protocol.parse_heartbeat(payload[:-1]) is None  # truncated
 
 

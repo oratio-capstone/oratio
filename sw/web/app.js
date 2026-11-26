@@ -180,12 +180,68 @@ function setConn(text, cls) {
 
 // ---- audio -------------------------------------------------------------------
 
+const SAMPLE_RATE = 16000;     // the devices' audio format: 16 kHz, 16-bit mono PCM
+const START_DELAY_S = 0.12;    // small buffer against network jitter
+const MAX_DELAY_S = 0.5;       // further behind than this: drop frames to catch up
+const VOLUME_KEY = "oratio-listen-volume";
+let listenVolume = 2;          // 200 %: the devices' microphones are quiet
+try { listenVolume = Number(localStorage.getItem(VOLUME_KEY)) || listenVolume; } catch (e) { /* default */ }
+let listenOut = null;          // shared output: a limiter, so a loud voice at high volume doesn't distort
+
+function listenOutput() {
+  if (!listenOut) {
+    listenOut = audioCtx.createDynamicsCompressor();
+    listenOut.threshold.value = -6;
+    listenOut.ratio.value = 12;
+    listenOut.connect(audioCtx.destination);
+  }
+  return listenOut;
+}
+
+// Called from the Listen click, so the browser allows sound.
+function startPlayback(stream) {
+  unlockAudio();
+  if (!audioCtx || stream.gain) return;
+  stream.gain = audioCtx.createGain();
+  stream.gain.gain.value = listenVolume;
+  stream.gain.connect(listenOutput());
+  stream.nextTime = 0;
+}
+
+function play(stream, samples) {
+  if (!stream.gain || !audioReady() || stream.paused) return;
+  const now = audioCtx.currentTime;
+  if (stream.nextTime < now) stream.nextTime = now + START_DELAY_S;  // first frame, or after a gap
+  if (stream.nextTime - now > MAX_DELAY_S) return;                   // too far behind: skip
+  const buffer = audioCtx.createBuffer(1, samples.length, SAMPLE_RATE);
+  const channel = buffer.getChannelData(0);
+  for (let i = 0; i < samples.length; i++) channel[i] = samples[i] / 32768;
+  const source = audioCtx.createBufferSource();
+  source.buffer = buffer;
+  source.connect(stream.gain);
+  source.start(stream.nextTime);
+  stream.nextTime += buffer.duration;
+}
+
+function setListenVolume(value) {
+  listenVolume = value;
+  try { localStorage.setItem(VOLUME_KEY, String(value)); } catch (e) { /* this page only */ }
+  for (const stream of listening.values()) {
+    if (stream.gain) stream.gain.gain.value = value;
+    const slider = stream.card.querySelector(".wave-vol input");
+    if (slider) slider.value = value;
+    const label = stream.card.querySelector(".wave-vol output");
+    if (label) label.textContent = `${Math.round(value * 100)} %`;
+  }
+}
+
 // Binary frame: 2-byte big-endian node id, then 16-bit little-endian PCM samples.
 function onAudio(buffer) {
   const id = new DataView(buffer).getUint16(0);
   const stream = listening.get(id);
   if (!stream) return;
   const samples = new Int16Array(buffer, 2, (buffer.byteLength - 2) >> 1);
+  play(stream, samples);
   let sumSquares = 0;
   for (let i = 0; i < samples.length; i++) sumSquares += samples[i] * samples[i];
   const rms = Math.sqrt(sumSquares / Math.max(1, samples.length)) / 32768;
@@ -210,8 +266,10 @@ function toggleListen(id, emergency = false) {
     openEmergencyDialog(id);
     return;
   } else {
-    listening.set(id, { frames: 0, levels: new Float32Array(WAVE_HISTORY), head: 0, lastFrameAt: 0,
-                        emergency, paused: false, card: makeWaveCard(id, emergency) });
+    const stream = { frames: 0, levels: new Float32Array(WAVE_HISTORY), head: 0, lastFrameAt: 0,
+                     emergency, paused: false, card: makeWaveCard(id, emergency), gain: null, nextTime: 0 };
+    listening.set(id, stream);
+    startPlayback(stream);
     send({ type: "listen", node_id: id, emergency });
     requestAnimationFrame(drawWaves);
   }
@@ -221,6 +279,7 @@ function toggleListen(id, emergency = false) {
 function endStream(id) {
   const stream = listening.get(id);
   if (!stream) return;
+  if (stream.gain) stream.gain.disconnect();  // silences anything still scheduled
   stream.card.remove();
   listening.delete(id);
   scheduleRender();
@@ -264,9 +323,14 @@ function makeWaveCard(id, emergency) {
       <strong class="wave-name"></strong>
       ${emergency ? '<span class="tag-emergency">Emergency listen</span>' : ""}
       <span class="wave-stat muted"></span>
+      <label class="wave-vol" title="Listening volume (all streams, remembered in this browser)">
+        Volume <input type="range" min="0" max="4" step="0.1" value="${listenVolume}">
+        <output>${Math.round(listenVolume * 100)} %</output>
+      </label>
       <button data-node="${id}">Stop</button>
     </div>
     <canvas class="wave"></canvas>`;
+  card.querySelector(".wave-vol input").addEventListener("input", (e) => setListenVolume(Number(e.target.value)));
   $("waves").appendChild(card);
   $("listening-section").hidden = false;
   return card;
@@ -537,15 +601,48 @@ function render() {
   if (currentTab() === "topology") renderTopology();
 }
 
+// ---- dates: lists are grouped under day headings, rows show only the time ----
+
+function dayLabel(ts) {
+  const d = new Date(ts * 1000);
+  const today = new Date();
+  const yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
+  if (d.toDateString() === today.toDateString()) return "Today";
+  if (d.toDateString() === yesterday.toDateString()) return "Yesterday";
+  const options = { month: "short", day: "numeric" };
+  if (d.getFullYear() !== today.getFullYear()) options.year = "numeric";
+  return d.toLocaleDateString([], options);  // e.g. "Nov 24"
+}
+
+function clock(ts) {  // e.g. "6:42:05 AM"
+  return new Date(ts * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
+}
+
+function fullTime(ts) {  // for tooltips: the exact moment, seconds included
+  return new Date(ts * 1000).toLocaleString([], { dateStyle: "medium", timeStyle: "medium" });
+}
+
 function renderAlerts() {
   const list = $("alerts");
   list.replaceChildren();
   if (!alerts.length) list.innerHTML = '<li class="muted">No alerts</li>';
+  let day = null;
   for (const a of [...alerts].reverse()) {
+    if (dayLabel(a.ts) !== day) {
+      day = dayLabel(a.ts);
+      const heading = document.createElement("li");
+      heading.className = "day";
+      heading.textContent = day;
+      list.appendChild(heading);
+    }
     const li = document.createElement("li");
     li.className = a.kind === "sos" ? "sos" : a.kind === "relay_dropped" ? "relay-down" : "";
+    li.title = fullTime(a.ts);
     const repeats = a.count > 1 ? ` (sent ${a.count}×)` : "";
-    li.textContent = `${new Date(a.ts * 1000).toLocaleTimeString()} — ${a.message}${repeats}`;
+    const time = document.createElement("span");
+    time.className = "time";
+    time.textContent = clock(a.ts);
+    li.append(time, `${a.message}${repeats}`);
     if (a.kind === "sos" && a.acked) {
       const ack = document.createElement("span");
       ack.className = "acked";
@@ -907,13 +1004,6 @@ function duration(seconds) {
   return m < 60 ? `${m} min ${s} s` : `${Math.floor(m / 60)} h ${m % 60} min`;
 }
 
-function when(ts) {
-  const d = new Date(ts * 1000);
-  const today = d.toDateString() === new Date().toDateString();
-  return today ? d.toLocaleTimeString()
-    : d.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
-}
-
 function whoName(event) {
   return event.node_id === null || event.node_id === undefined ? "Gateway" : displayName(event.node_id);
 }
@@ -931,10 +1021,22 @@ function renderLog() {
   if (!logEvents.length) {
     body.innerHTML = '<tr><td colspan="4" class="muted">No events match these filters.</td></tr>';
   }
+  let day = null;
   for (const e of logEvents) {
+    if (dayLabel(e.ts) !== day) {
+      day = dayLabel(e.ts);
+      const heading = document.createElement("tr");
+      heading.className = "log-day";
+      const cell = document.createElement("td");
+      cell.colSpan = 4;
+      cell.textContent = day;
+      heading.appendChild(cell);
+      body.appendChild(heading);
+    }
     const tr = document.createElement("tr");
     const time = document.createElement("td");
-    time.textContent = when(e.ts);
+    time.textContent = clock(e.ts);
+    time.title = fullTime(e.ts);
     time.className = "log-time";
     const type = document.createElement("td");
     const badge = document.createElement("span");
