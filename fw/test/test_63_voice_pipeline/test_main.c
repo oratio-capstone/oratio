@@ -1,4 +1,9 @@
-/* AB#63: real microphone -> node -> root -> gateway -> root -> speaker node.
+/* AB#63: two-way voice through node -> root -> gateway -> root -> node.
+ * Flash root_test to the relay and the same node_test build to both endpoints.
+ * Each endpoint needs a microphone, PTT button, amplifier and speaker.
+ * TEST_IS_PRODUCER is ignored: every non-root node captures and plays audio.
+ * Wait for both nodes to register at the gateway, then take turns holding PTT.
+ * Playback remains active during capture; no muting or echo cancellation is added.
  * This is a manual hardware integration test, not a Unity assertion suite.
  */
 #include "audio_capture.h"
@@ -11,36 +16,33 @@
 #ifndef APP_IS_ROOT
 #error "Select a root_test or node_test environment"
 #endif
-#ifndef TEST_IS_PRODUCER
-#error "Define TEST_IS_PRODUCER as 0 (speaker) or 1 (microphone)"
-#endif
-#if (TEST_IS_PRODUCER != 0) && (TEST_IS_PRODUCER != 1)
-#error "TEST_IS_PRODUCER must be 0 or 1"
+#if (APP_IS_ROOT != 0) && (APP_IS_ROOT != 1)
+#error "APP_IS_ROOT must be 0 or 1"
 #endif
 
 static const char *TAG = "TEST_63";
 static MessageBufferHandle_t s_capture_buffer;
 static MessageBufferHandle_t s_playback_buffer;
 
-/* Allocate only the selected endpoint's buffer and open its existing driver.
- * A root has no audio endpoint: both NULL handles select heartbeat-only service.
+/* Workers have both audio paths. The root has neither: its NULL buffer handles
+ * select heartbeat-only application traffic while Mesh-Lite forwards node traffic.
  */
 static esp_err_t voice_endpoint_open(void)
 {
 #if APP_IS_ROOT
     return ESP_OK;
-#elif TEST_IS_PRODUCER
+#else
     s_capture_buffer = xMessageBufferCreate(NETWORK_CAPTURE_BUFFER_BYTES);
-    if (s_capture_buffer == NULL)
+    s_playback_buffer = xMessageBufferCreate(NETWORK_PLAYBACK_BUFFER_BYTES);
+    if (s_capture_buffer == NULL || s_playback_buffer == NULL)
     {
         return ESP_ERR_NO_MEM;
     }
-    return audio_capture_open();
-#else
-    s_playback_buffer = xMessageBufferCreate(NETWORK_PLAYBACK_BUFFER_BYTES);
-    if (s_playback_buffer == NULL)
+
+    esp_err_t result = audio_capture_open();
+    if (result != ESP_OK)
     {
-        return ESP_ERR_NO_MEM;
+        return result;
     }
     return audio_output_open();
 #endif
@@ -49,9 +51,8 @@ static esp_err_t voice_endpoint_open(void)
 /* Only call before the network task owns the buffers; workers have no stop API. */
 static void voice_endpoint_close(void)
 {
-#if !APP_IS_ROOT && TEST_IS_PRODUCER
+#if !APP_IS_ROOT
     (void)audio_capture_close();
-#elif !APP_IS_ROOT
     (void)audio_output_close();
 #endif
     if (s_capture_buffer != NULL)
@@ -66,26 +67,26 @@ static void voice_endpoint_close(void)
     }
 }
 
-/* Reuse the production workers: no synthetic frames or extra buffer readers.
- * Capture supplies sequence and sample length; networking serializes the frame.
+/* Start playback first so incoming frames can drain before capture begins.
+ * Each buffer still has exactly one writer and one reader; no audio copies or
+ * application-level producer/consumer switching are needed in this test.
  */
 static esp_err_t voice_endpoint_start(void)
 {
 #if APP_IS_ROOT
     ESP_LOGI(TAG, "ROOT: mesh relay and gateway connection; no local audio");
     return ESP_OK;
-#elif TEST_IS_PRODUCER
-    const esp_err_t result = audio_capture_task_start(s_capture_buffer);
-    if (result == ESP_OK)
-    {
-        ESP_LOGI(TAG, "MICROPHONE: wait for both nodes in the gateway registry, then hold PTT to speak");
-    }
-    return result;
 #else
-    const esp_err_t result = playback_task_start(s_playback_buffer);
+    esp_err_t result = playback_task_start(s_playback_buffer);
+    if (result != ESP_OK)
+    {
+        return result;
+    }
+
+    result = audio_capture_task_start(s_capture_buffer);
     if (result == ESP_OK)
     {
-        ESP_LOGI(TAG, "SPEAKER: playback worker started; waiting for forwarded audio");
+        ESP_LOGI(TAG, "VOICE NODE: capture and playback started; hold PTT to send, incoming audio plays automatically");
     }
     return result;
 #endif
@@ -124,7 +125,8 @@ void app_main(void)
     }
 
     /* From here the network owns access to these buffers for its lifetime.
-     * Keep them alive even if an audio worker cannot start; reset to retry.
+     * Keep them alive if either audio worker fails to start: playback may already
+     * be running when capture startup fails. There is no worker stop API; reset to retry.
      */
     result = voice_endpoint_start();
     if (result != ESP_OK)
