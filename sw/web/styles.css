@@ -34,6 +34,10 @@ th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line
 #alerts { list-style: none; padding: 0; margin: 0; }
 #alerts li { padding: 6px 0; border-bottom: 1px solid var(--line); }
 #alerts li.sos { color: var(--bad); font-weight: 600; }
+#alerts li.day { padding: 12px 0 4px; font-size: 13px; font-weight: 600; color: var(--muted); }
+#alerts li.day:first-child { padding-top: 0; }
+#alerts .time { display: inline-block; min-width: 72px; margin-right: 10px; color: var(--muted); font-weight: normal;
+                font-variant-numeric: tabular-nums; }
 #alerts li.sos .acked { color: var(--ok); font-weight: normal; }
 button { font: inherit; padding: 2px 10px; cursor: pointer; color: var(--fg); background: var(--bg);
          border: 1px solid var(--line); border-radius: 6px; }
@@ -148,6 +152,8 @@ button.rename:hover { color: var(--accent); }
 .stat-note.stat-bad { color: var(--bad); font-weight: 600; }
 .log-table td { vertical-align: top; }
 .log-table td:nth-child(3) { white-space: nowrap; }
+.log-table tr.log-day td { padding-top: 14px; font-size: 13px; font-weight: 600; color: var(--muted);
+                           border-bottom: 1px solid var(--line); }
 .log-time { white-space: nowrap; color: var(--muted); font-variant-numeric: tabular-nums; }
 .kind { display: inline-block; font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 999px;
         border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }

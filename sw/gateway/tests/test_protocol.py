@@ -39,6 +39,8 @@ def test_heartbeat_telemetry():
     assert hb == ("relay", 2, -61, "02:00:00:00:00:01", "02:00:00:00:00:0a")
     assert hb.role == "relay" and hb.rssi == -61
     assert protocol.parse_heartbeat(b"") is None
+    assert protocol.parse_heartbeat(bytes([0xBF])) == (None, None, -65, None, None)   # POC: RSSI only
+    assert protocol.parse_heartbeat(bytes([127])).rssi is None                       # not available
     assert protocol.parse_heartbeat(payload[:-1]) is None  # truncated
 
 

@@ -23,6 +23,7 @@ import protocol
 log = logging.getLogger("udp")
 
 CONTROL_RESEND_S = 1.0  # devices treat 3 s without a control packet as "all off"
+AUDIO_SEEN_S = 1.0      # how often a talking node's audio is reported as "still alive"
 
 
 class _Protocol(asyncio.DatagramProtocol):
@@ -41,6 +42,7 @@ class UdpServer:
         self.listening: set[int] = set()   # nodes a dashboard listens to: their audio goes on Q in
         self.emergency: set[int] = set()   # nodes whose wearer must be shown an emergency listen
         self.malformed = 0
+        self._audio_seen: dict[int, float] = {}  # node -> when its audio was last reported on Q in
         self.seq = 0                        # sequence number of the packets the gateway sends
         self.transport: asyncio.DatagramTransport | None = None
 
@@ -58,6 +60,13 @@ class UdpServer:
                     self.transport.sendto(data, other_addr)
             if node_id in self.listening:
                 messages.put_nowait_drop_oldest(self.q_in, messages.audio(node_id, packet.payload))
+            # A talking node skips heartbeats, so its audio must count as "alive". Report it at most
+            # once a second (header only, no payload) instead of 50 frames a second.
+            now = time.monotonic()
+            if now - self._audio_seen.get(node_id, float("-inf")) >= AUDIO_SEEN_S:
+                self._audio_seen[node_id] = now
+                messages.put_nowait_drop_oldest(self.q_in, messages.packet(
+                    node_id, "A", b"", f"{addr[0]}:{addr[1]}", packet.seq, time.time()))
             return
 
         messages.put_nowait_drop_oldest(self.q_in, messages.packet(

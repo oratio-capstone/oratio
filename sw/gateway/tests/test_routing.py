@@ -36,12 +36,15 @@ async def test_audio_is_forwarded_to_the_other_nodes_and_only_listened_audio_goe
         t1.sendto(audio)
         assert await asyncio.wait_for(d2.received.get(), 2) == audio  # node 2 hears node 1, untouched
         assert d1.received.empty()                                     # nobody hears themselves
-        assert q_in.empty()                                            # no dashboard listening
+        seen = q_in.get_nowait()                                       # only a "still alive" note,
+        assert (seen["type"], seen["node_id"], seen["kind"], seen["payload"]) == ("packet", 1, "A", b"")
+        assert q_in.empty()                                            # no audio: nobody is listening
 
         server.listening.add(1)
         t1.sendto(audio)
         await asyncio.wait_for(d2.received.get(), 2)
         assert await asyncio.wait_for(q_in.get(), 2) == messages.audio(1, b"\x01\x02" * 80)
+        assert q_in.empty()                                            # the note was sent < 1 s ago
     finally:
         t1.close()
         t2.close()
@@ -102,3 +105,39 @@ def test_liveness_is_checked_on_the_websocket_side():
     assert ws.nodes[7]["status"] != "active"
     ws.apply_event(messages.packet(7, "H", b"", "10.0.0.7:5000", ts=105.0))
     assert ws.nodes[7]["status"] == "active"   # back as soon as it is heard again
+
+
+async def test_a_talking_node_stays_online_without_heartbeats():
+    """Devices skip heartbeats while they send audio; the gateway must not mark them dropped."""
+    q_in, q_out = asyncio.Queue(), asyncio.Queue()
+    server = await udp_devserver.start(q_in, q_out, "127.0.0.1", 0)
+    transport, _ = await _device(server.port)
+    ws = _ws(node_timeout=3.0)
+    try:
+        frame = protocol.build(protocol.TYPE_AUDIO, 4, b"\x00\x00" * 320)
+        for _ in range(25):                    # half a second of talking: one note, not 25
+            transport.sendto(frame)
+        await asyncio.sleep(0.1)
+        notes = []
+        while not q_in.empty():
+            notes.append(q_in.get_nowait())
+        assert len(notes) == 1
+
+        ws.apply_event({**notes[0], "ts": 100.0})   # first sign of the node is its audio
+        assert ws.nodes[4]["status"] == "active"
+        ws.apply_event({**notes[0], "ts": 102.5})   # still talking 2.5 s later
+        ws.check_liveness(105.0)
+        assert ws.nodes[4]["status"] == "active"   # 2.5 s since the last packet, under 3 s
+    finally:
+        transport.close()
+        for task in server._tasks:
+            task.cancel()
+
+
+def test_poc_heartbeat_fills_the_link_column():
+    ws = _ws()
+    ws.apply_event(messages.packet(9, "H", bytes([0xC3]), "10.0.0.9:5000", ts=100.0))   # -61 dBm
+    assert ws.nodes[9]["link"] == -61
+    ws.apply_event(messages.packet(9, "H", bytes([127]), "10.0.0.9:5000", ts=101.0))     # unavailable
+    assert ws.nodes[9]["link"] == -61   # keeps the last known value
+    assert ws.nodes[9]["role"] is None  # role, level and topology come after the POC

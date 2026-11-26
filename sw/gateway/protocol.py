@@ -11,7 +11,12 @@ Header, 7 bytes, big-endian (the firmware's network.c, and sw/udp_server.py):
     bytes 5-6   payload length in bytes; must equal the bytes that follow
     bytes 7..   payload (depends on the type)
 
-Heartbeat payload (agreed with the firmware team), 15 bytes:
+Heartbeat payload, POC firmware (sent today), 1 byte:
+
+    byte 7        RSSI to its upstream link in dBm, signed (the root: to the hotspot/AP;
+                  other nodes: to their mesh parent); 127 = not available
+
+Heartbeat payload agreed for after the POC, 15 bytes:
 
     byte 7        role: 0 = worker (worn by a person), 1 = relay (fixed in place)
     byte 8        mesh level, root = 1                   esp_mesh_lite_get_level()
@@ -25,12 +30,15 @@ which gives the mesh tree. A level-1 node's parent is the Pi's access point.
 What the firmware sends today (POC) vs. later. Update this when the firmware changes:
 
     header        in use
-    'A' audio     in use
-    'H' heartbeat in use, but with an empty payload: the 15-byte telemetry above comes after the POC
+    'A' audio     in use. While a node sends audio it skips heartbeats (any packet proves it is alive),
+                  so the gateway must count audio as liveness too
+    'H' heartbeat in use, with the 1-byte RSSI payload; the 15-byte telemetry comes after the POC
+                  (sent only when the node has sent nothing else for 1 s)
     'T' telemetry firmware test data; the gateway ignores it
     'S' SOS       after the POC
     'N' control   after the POC (the gateway already sends it; firmware that doesn't know it ignores it)
-    'P' talk      not planned (no push-to-talk); the gateway accepts it but nothing sends it
+    'P' talk      not sent: the device's push-to-talk button just starts its audio; the gateway accepts
+                  'P' but nothing sends it
 
 The gateway must keep working with nodes that don't send the "after the POC" parts yet.
 """
@@ -62,6 +70,8 @@ CONTROL_STREAM = 0x01
 CONTROL_EMERGENCY = 0x02
 
 HEARTBEAT = struct.Struct(">BBb6s6s")
+RSSI_ONLY = struct.Struct(">b")  # the POC firmware's heartbeat payload
+RSSI_UNAVAILABLE = 127
 ROLE_WORKER = 0
 ROLE_RELAY = 1
 ROLES = {ROLE_WORKER: "worker", ROLE_RELAY: "relay"}
@@ -105,11 +115,11 @@ def build_talk(pressed: bool) -> bytes:
 
 
 class Heartbeat(NamedTuple):
-    role: str          # "worker" or "relay"
-    level: int         # hops from the Pi; root = 1
-    rssi: int          # signal to parent, dBm
-    parent_mac: str    # "aa:bb:cc:dd:ee:ff"
-    mac: str           # this node's SoftAP MAC
+    role: str | None        # "worker" or "relay"; None = not sent (POC firmware)
+    level: int | None       # hops from the Pi; root = 1
+    rssi: int | None        # signal to parent, dBm; None = not available
+    parent_mac: str | None  # "aa:bb:cc:dd:ee:ff"
+    mac: str | None         # this node's SoftAP MAC
 
 
 def mac_str(raw: bytes) -> str:
@@ -121,7 +131,10 @@ def mac_bytes(mac: str) -> bytes:
 
 
 def parse_heartbeat(payload: bytes) -> Heartbeat | None:
-    """Decode the telemetry, or None if the heartbeat is too short to carry it."""
+    """Decode the telemetry: the full 15 bytes, the POC's 1-byte RSSI, or None for anything else."""
+    if len(payload) == RSSI_ONLY.size:
+        (rssi,) = RSSI_ONLY.unpack(payload)
+        return Heartbeat(None, None, None if rssi == RSSI_UNAVAILABLE else rssi, None, None)
     if len(payload) < HEARTBEAT.size:
         return None
     role, level, rssi, parent, own = HEARTBEAT.unpack_from(payload)
